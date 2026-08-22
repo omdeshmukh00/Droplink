@@ -25,7 +25,7 @@ async function bootstrap() {
   initCronJobs();
 
   // 5. Start HTTP Server Listening
-  server.listen(env.PORT, '0.0.0.0', () => {
+    server.listen(env.PORT, '0.0.0.0', () => {
     logger.info(`✨ LinkDrop Server active on http://0.0.0.0:${env.PORT} [Environment: ${env.NODE_ENV}]`);
   });
 
