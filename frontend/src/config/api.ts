@@ -7,6 +7,13 @@
  * E.g., "http://localhost:5000"
  */
 export function getBackendUrl(): string {
+  if (process.env.NEXT_PUBLIC_API_URL) {
+    let url = process.env.NEXT_PUBLIC_API_URL;
+    url = url.replace(/\/+$/, '');
+    url = url.replace(/\/api\/v1$/, '');
+    return url;
+  }
+
   if (typeof window !== 'undefined' && window.location && window.location.hostname) {
     const hostname = window.location.hostname;
     const protocol = window.location.protocol || 'http:';
@@ -15,13 +22,6 @@ export function getBackendUrl(): string {
     if (hostname !== 'localhost' && hostname !== '127.0.0.1') {
       return `${protocol}//${hostname}:5000`;
     }
-  }
-
-  if (process.env.NEXT_PUBLIC_API_URL) {
-    let url = process.env.NEXT_PUBLIC_API_URL;
-    url = url.replace(/\/+$/, '');
-    url = url.replace(/\/api\/v1$/, '');
-    return url;
   }
 
   return 'http://localhost:5000';
