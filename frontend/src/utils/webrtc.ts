@@ -38,7 +38,8 @@ export async function fetchIceConfiguration(): Promise<RTCConfiguration> {
   return DEFAULT_STUN_CONFIG;
 }
 
-export const CHUNK_SIZE = 16384; // 16KB per chunk
+export const CHUNK_SIZE = 32768; // 32KB per chunk for optimal cross-browser SCTP throughput
+export const BLOCK_SIZE = 1024 * 1024; // 1MB block size for in-memory slicing
 
 export interface WebRTCTransferProgress {
   fileId: string;
@@ -50,11 +51,23 @@ export interface WebRTCTransferProgress {
 
 export type WebRTCConnectionStateCallback = (state: RTCPeerConnectionState) => void;
 
+export interface CandidatePairDetails {
+  localCandidateType: string;
+  localProtocol: string;
+  localIp?: string;
+  remoteCandidateType: string;
+  remoteProtocol: string;
+  remoteIp?: string;
+  isRelay: boolean;
+  transportType: string; // 'P2P (Host/STUN)' | 'TURN Relay'
+}
+
 export class WebRTCPeerManager {
   private peerConnection: RTCPeerConnection | null = null;
   private dataChannel: RTCDataChannel | null = null;
   private onStateChangeCb: WebRTCConnectionStateCallback | null = null;
   private iceCandidateQueue: RTCIceCandidateInit[] = [];
+  private selectedCandidatePair: CandidatePairDetails | null = null;
 
   constructor(config?: RTCConfiguration) {
     if (typeof window !== 'undefined') {
@@ -87,6 +100,9 @@ export class WebRTCPeerManager {
     this.peerConnection.oniceconnectionstatechange = () => {
       if (this.peerConnection) {
         console.log(`[WebRTC] iceConnectionState -> ${this.peerConnection.iceConnectionState}`);
+        if (this.peerConnection.iceConnectionState === 'connected' || this.peerConnection.iceConnectionState === 'completed') {
+          this.logSelectedCandidatePair();
+        }
       }
     };
 
@@ -106,27 +122,57 @@ export class WebRTCPeerManager {
       if (event.candidate) {
         const type = event.candidate.type || 'unknown';
         const protocol = event.candidate.protocol || 'unknown';
-        console.log(`[WebRTC] Local ICE candidate gathered: type=${type}, protocol=${protocol}`);
+        const address = event.candidate.address || event.candidate.candidate.split(' ')[4] || 'obscured/mDNS';
+        console.log(`[WebRTC ICE Gathered] Local candidate: type=${type}, protocol=${protocol}, address=${address}`);
+      } else {
+        console.log('[WebRTC ICE Gathered] Local candidate gathering complete (null candidate).');
       }
     };
   }
 
-  private async logSelectedCandidatePair(): Promise<void> {
-    if (!this.peerConnection) return;
+  public async logSelectedCandidatePair(): Promise<CandidatePairDetails | null> {
+    if (!this.peerConnection) return null;
     try {
       const stats = await this.peerConnection.getStats();
+      let activePair: CandidatePairDetails | null = null;
+
       stats.forEach((report) => {
-        if (report.type === 'candidate-pair' && report.state === 'succeeded') {
+        if (report.type === 'candidate-pair' && (report.state === 'succeeded' || report.nominated)) {
           const localCand = stats.get(report.localCandidateId);
           const remoteCand = stats.get(report.remoteCandidateId);
+
+          const localType = localCand?.candidateType || 'unknown';
+          const remoteType = remoteCand?.candidateType || 'unknown';
+          const isRelay = localType === 'relay' || remoteType === 'relay';
+
+          activePair = {
+            localCandidateType: localType,
+            localProtocol: localCand?.protocol || 'unknown',
+            localIp: localCand?.ip || localCand?.address,
+            remoteCandidateType: remoteType,
+            remoteProtocol: remoteCand?.protocol || 'unknown',
+            remoteIp: remoteCand?.ip || remoteCand?.address,
+            isRelay,
+            transportType: isRelay ? 'TURN Relay' : `Direct P2P (${localType.toUpperCase()}/${remoteType.toUpperCase()})`,
+          };
+
+          this.selectedCandidatePair = activePair;
+
           console.log(
-            `[WebRTC] Selected Candidate Pair: Local (${localCand?.candidateType || 'unknown'}, ${localCand?.protocol || 'unknown'}) <-> Remote (${remoteCand?.candidateType || 'unknown'}, ${remoteCand?.protocol || 'unknown'})`
+            `[WebRTC ICE Selected Pair] ${activePair.transportType} | Local: ${localType} (${activePair.localIp || 'hidden'}) <-> Remote: ${remoteType} (${activePair.remoteIp || 'hidden'})`
           );
         }
       });
+
+      return activePair;
     } catch (err) {
-      console.warn('[WebRTC] Error retrieving stats for candidate pair:', err);
+      console.warn('[WebRTC ICE] Error retrieving stats for candidate pair:', err);
+      return null;
     }
+  }
+
+  public getSelectedCandidatePairDetails(): CandidatePairDetails | null {
+    return this.selectedCandidatePair;
   }
 
   public onConnectionStateChange(cb: WebRTCConnectionStateCallback): void {
@@ -152,8 +198,13 @@ export class WebRTCPeerManager {
     if (this.peerConnection.remoteDescription && this.peerConnection.remoteDescription.type) {
       try {
         await this.peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+        const candObj = typeof candidate === 'string' ? null : candidate;
+        const candStr = candObj?.candidate || '';
+        const match = candStr.match(/typ\s+(\w+)/);
+        const candType = match ? match[1] : 'unknown';
+        console.log(`[WebRTC ICE Added] Remote candidate added: type=${candType}`);
       } catch (err) {
-        console.warn('[WebRTC] Failed to add ICE candidate:', err);
+        console.warn('[WebRTC ICE] Failed to add ICE candidate:', err);
       }
     } else {
       const isDuplicate = this.iceCandidateQueue.some(
@@ -163,7 +214,7 @@ export class WebRTCPeerManager {
           c.sdpMLineIndex === candidate.sdpMLineIndex
       );
       if (!isDuplicate) {
-        console.log('[WebRTC] Remote description not set yet. Queuing ICE candidate.');
+        console.log('[WebRTC ICE] Remote description not set yet. Queuing ICE candidate.');
         this.iceCandidateQueue.push(candidate);
       }
     }
@@ -178,8 +229,9 @@ export class WebRTCPeerManager {
     for (const candidate of candidates) {
       try {
         await this.peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+        console.log('[WebRTC ICE] Successfully processed queued remote ICE candidate');
       } catch (err) {
-        console.warn('[WebRTC] Failed to add queued ICE candidate:', err);
+        console.warn('[WebRTC ICE] Failed to add queued ICE candidate:', err);
       }
     }
   }
@@ -219,7 +271,11 @@ export class WebRTCPeerManager {
   }
 
   /**
-   * Sends a File over DataChannel in 16KB chunks with backpressure handling.
+   * Sends a File over DataChannel using high-throughput memory-buffered streaming.
+   * - Block-reads 1MB slices from File to minimize async disk I/O.
+   * - Transmits in 32KB chunks via DataChannel.
+   * - Backpressure low threshold set to 256KB (high watermark 1.5MB) to keep SCTP pipe filled.
+   * - Throttles UI progress updates to 100ms intervals to eliminate main thread lag.
    */
   public async sendFile(
     file: File,
@@ -232,7 +288,8 @@ export class WebRTCPeerManager {
     }
 
     const channel = this.dataChannel;
-    channel.bufferedAmountLowThreshold = 65536; // 64KB threshold for backpressure
+    // Set low threshold to 256KB so SCTP buffer stays continuously fed
+    channel.bufferedAmountLowThreshold = 256 * 1024;
 
     // Send metadata header first
     const header = JSON.stringify({
@@ -247,6 +304,7 @@ export class WebRTCPeerManager {
 
     let offset = 0;
     const totalSize = file.size;
+    let lastProgressTime = 0;
 
     if (totalSize === 0 && onProgress) {
       onProgress({
@@ -259,31 +317,43 @@ export class WebRTCPeerManager {
     }
 
     while (offset < totalSize) {
-      if (channel.bufferedAmount > 1024 * 1024) {
-        // Wait for buffer to drain
-        await new Promise<void>((resolve) => {
-          const onLow = () => {
-            channel.removeEventListener('bufferedamountlow', onLow);
-            resolve();
-          };
-          channel.addEventListener('bufferedamountlow', onLow);
-        });
-      }
+      // Read up to 1MB into memory to avoid repeated async disk reads per 32KB chunk
+      const blockLength = Math.min(BLOCK_SIZE, totalSize - offset);
+      const blockSlice = file.slice(offset, offset + blockLength);
+      const blockBuffer = await blockSlice.arrayBuffer();
 
-      const slice = file.slice(offset, offset + CHUNK_SIZE);
-      const buffer = await slice.arrayBuffer();
-      channel.send(buffer);
+      let blockOffset = 0;
+      while (blockOffset < blockBuffer.byteLength) {
+        if (channel.bufferedAmount > 1536 * 1024) {
+          // Wait for buffer to drain to 256KB threshold
+          await new Promise<void>((resolve) => {
+            const onLow = () => {
+              channel.removeEventListener('bufferedamountlow', onLow);
+              resolve();
+            };
+            channel.addEventListener('bufferedamountlow', onLow);
+          });
+        }
 
-      offset += buffer.byteLength;
+        const chunkLength = Math.min(CHUNK_SIZE, blockBuffer.byteLength - blockOffset);
+        const chunk = blockBuffer.slice(blockOffset, blockOffset + chunkLength);
+        channel.send(chunk);
 
-      if (onProgress) {
-        onProgress({
-          fileId,
-          fileName: file.name,
-          bytesTransferred: offset,
-          totalBytes: totalSize,
-          percentage: Math.min(100, Math.round((offset / totalSize) * 100)),
-        });
+        blockOffset += chunkLength;
+        offset += chunkLength;
+
+        // Throttle progress updates to at most once per 100ms
+        const now = Date.now();
+        if (onProgress && (now - lastProgressTime > 100 || offset >= totalSize)) {
+          lastProgressTime = now;
+          onProgress({
+            fileId,
+            fileName: file.name,
+            bytesTransferred: offset,
+            totalBytes: totalSize,
+            percentage: Math.min(100, Math.round((offset / totalSize) * 100)),
+          });
+        }
       }
     }
 
@@ -312,3 +382,4 @@ export class WebRTCPeerManager {
     }
   }
 }
+

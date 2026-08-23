@@ -158,9 +158,11 @@ export default function ReceivePage() {
         }
       };
 
-      manager.onConnectionStateChange((state) => {
+      manager.onConnectionStateChange(async (state) => {
         if (state === 'connected') {
-          setConnectionStatus('Direct WebRTC P2P Connection Established!');
+          const details = await manager.logSelectedCandidatePair();
+          const modeLabel = details ? details.transportType : 'WebRTC P2P';
+          setConnectionStatus(`WebRTC Connection Established (${modeLabel})!`);
         } else if (state === 'failed' || state === 'disconnected') {
           setConnectionStatus('Direct connection lost. You can download via Cloud Fallback.');
         }

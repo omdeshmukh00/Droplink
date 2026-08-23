@@ -549,8 +549,11 @@ function BulkPageContent() {
         }
       };
 
-      manager.onConnectionStateChange((state) => {
-        if (state === 'failed' || state === 'disconnected') {
+      manager.onConnectionStateChange(async (state) => {
+        if (state === 'connected') {
+          const details = await manager.logSelectedCandidatePair();
+          console.log(`[Bulk WebRTC] Connection Established (${details?.transportType || 'P2P'})`);
+        } else if (state === 'failed' || state === 'disconnected') {
           clearTimeoutTimer();
           setUserUploadStatus('P2P connection lost or failed to connect to Host. Please retry.');
         }

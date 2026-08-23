@@ -245,12 +245,14 @@ export default function SendPage() {
       }
     };
 
-    manager.onConnectionStateChange((state) => {
+    manager.onConnectionStateChange(async (state) => {
       if (state === 'connected') {
         setConnectionState('connecting');
-        setStatusMessage('P2P Connection Established. Preparing WebRTC DataChannel...');
+        const details = await manager.logSelectedCandidatePair();
+        const modeLabel = details ? details.transportType : 'WebRTC P2P';
+        setStatusMessage(`Connection Established (${modeLabel}). Preparing DataChannel...`);
       } else if (state === 'failed' || state === 'disconnected') {
-        setStatusMessage('Direct P2P connection lost. You can use Cloud Fallback.');
+        setStatusMessage('Direct connection lost. You can use Cloud Fallback.');
       }
     });
 
