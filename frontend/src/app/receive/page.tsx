@@ -134,80 +134,93 @@ export default function ReceivePage() {
 
     socket.emit('join-transfer-room', { roomKey });
 
-    const manager = new WebRTCPeerManager();
-    rtcManagerRef.current = manager;
-    const pc = manager.getPeerConnection();
+    let isSubscribed = true;
 
-    pc.onicecandidate = (event) => {
-      if (event.candidate) {
-        socket.emit('webrtc-ice-candidate', {
-          roomKey,
-          candidate: event.candidate,
-        });
+    if (rtcManagerRef.current) {
+      rtcManagerRef.current.close();
+      rtcManagerRef.current = null;
+    }
+
+    WebRTCPeerManager.create().then((manager) => {
+      if (!isSubscribed) {
+        manager.close();
+        return;
       }
-    };
+      rtcManagerRef.current = manager;
+      const pc = manager.getPeerConnection();
 
-    manager.onConnectionStateChange((state) => {
-      if (state === 'connected') {
-        setConnectionStatus('Direct WebRTC P2P Connection Established!');
-      } else if (state === 'failed' || state === 'disconnected') {
-        setConnectionStatus('Direct connection lost. You can download via Cloud Fallback.');
-      }
-    });
-
-    // Send pairing code requirement to Sender along with Receiver Name
-    socket.emit('pairing-required', {
-      roomKey,
-      verificationCode: pairingCode,
-      receiverName: receiverName || getDefaultDeviceName(),
-    });
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setConnectionStatus(`Waiting for sender verification (${pairingCode})...`);
-
-    socket.on('pairing-verified', async () => {
-      setIsPairingVerified(true);
-      setConnectionStatus('Pairing verified! Initiating WebRTC DataChannel offer...');
-
-      try {
-        const dc = manager.createDataChannel('fileTransfer');
-        setupDataChannel(dc);
-
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-
-        socket.emit('webrtc-offer', {
-          roomKey,
-          offer,
-        });
-      } catch (err) {
-        console.error('Failed to create WebRTC offer:', err);
-      }
-    });
-
-    socket.on('webrtc-answer', async (data: { answer: RTCSessionDescriptionInit }) => {
-      try {
-        await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
-      } catch (err) {
-        console.error('Failed to set remote description from answer:', err);
-      }
-    });
-
-    socket.on('webrtc-ice-candidate', async (data: { candidate: RTCIceCandidateInit }) => {
-      try {
-        if (pc.remoteDescription) {
-          await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          socket.emit('webrtc-ice-candidate', {
+            roomKey,
+            candidate: event.candidate,
+          });
         }
-      } catch (err) {
-        console.error('Failed to add ICE candidate:', err);
-      }
+      };
+
+      manager.onConnectionStateChange((state) => {
+        if (state === 'connected') {
+          setConnectionStatus('Direct WebRTC P2P Connection Established!');
+        } else if (state === 'failed' || state === 'disconnected') {
+          setConnectionStatus('Direct connection lost. You can download via Cloud Fallback.');
+        }
+      });
+
+      // Send pairing code requirement to Sender along with Receiver Name
+      socket.emit('pairing-required', {
+        roomKey,
+        verificationCode: pairingCode,
+        receiverName: receiverName || getDefaultDeviceName(),
+      });
+      setConnectionStatus(`Waiting for sender verification (${pairingCode})...`);
+
+      socket.on('pairing-verified', async () => {
+        setIsPairingVerified(true);
+        setConnectionStatus('Pairing verified! Initiating WebRTC DataChannel offer...');
+
+        try {
+          const dc = manager.createDataChannel('fileTransfer');
+          setupDataChannel(dc);
+
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+
+          socket.emit('webrtc-offer', {
+            roomKey,
+            offer,
+          });
+        } catch (err) {
+          console.error('Failed to create WebRTC offer:', err);
+        }
+      });
+
+      socket.on('webrtc-answer', async (data: { answer: RTCSessionDescriptionInit }) => {
+        try {
+          await manager.setRemoteDescription(data.answer);
+        } catch (err) {
+          console.error('Failed to set remote description from answer:', err);
+        }
+      });
+
+      socket.on('webrtc-ice-candidate', async (data: { candidate: RTCIceCandidateInit }) => {
+        try {
+          await manager.addIceCandidate(data.candidate);
+        } catch (err) {
+          console.error('Failed to add ICE candidate:', err);
+        }
+      });
     });
 
     return () => {
+      isSubscribed = false;
       socket.off('pairing-verified');
       socket.off('webrtc-answer');
       socket.off('webrtc-ice-candidate');
       socket.emit('leave-transfer-room', { roomKey });
-      manager.close();
+      if (rtcManagerRef.current) {
+        rtcManagerRef.current.close();
+        rtcManagerRef.current = null;
+      }
     };
   }, [activeShareId, pairingCode, receiverName]);
 

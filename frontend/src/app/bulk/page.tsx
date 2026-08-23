@@ -201,9 +201,6 @@ function BulkPageContent() {
     }
   }, [bulkCodeInput]);
 
-  const userPendingIceRef = useRef<RTCIceCandidateInit[]>([]);
-  const hostPendingIceRef = useRef<RTCIceCandidateInit[]>([]);
-
   // Host Heartbeat & Socket Listener Setup
   useEffect(() => {
     if (!hostSession) return;
@@ -248,7 +245,7 @@ function BulkPageContent() {
           hostPeersRef.current.delete(data.senderSocketId);
         }
 
-        const peerManager = new WebRTCPeerManager();
+        const peerManager = await WebRTCPeerManager.create();
         hostPeersRef.current.set(data.senderSocketId, peerManager);
         const pc = peerManager.getPeerConnection();
 
@@ -421,28 +418,10 @@ function BulkPageContent() {
       }, 4000);
     });
 
-    const processUserPendingIce = async () => {
-      if (rtcManagerRef.current) {
-        const pc = rtcManagerRef.current.getPeerConnection();
-        while (userPendingIceRef.current.length > 0) {
-          const cand = userPendingIceRef.current.shift();
-          if (cand) {
-            try {
-              await pc.addIceCandidate(new RTCIceCandidate(cand));
-            } catch (e) {
-              console.error('Error adding queued user ICE candidate:', e);
-            }
-          }
-        }
-      }
-    };
-
     socket.on('bulk-webrtc-answer', async (data: { answer: RTCSessionDescriptionInit }) => {
       if (rtcManagerRef.current) {
         try {
-          const pc = rtcManagerRef.current.getPeerConnection();
-          await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
-          await processUserPendingIce();
+          await rtcManagerRef.current.setRemoteDescription(data.answer);
         } catch (err) {
           console.error('User answer error:', err);
         }
@@ -452,12 +431,7 @@ function BulkPageContent() {
     socket.on('bulk-webrtc-ice-candidate', async (data: { candidate: RTCIceCandidateInit }) => {
       if (rtcManagerRef.current) {
         try {
-          const pc = rtcManagerRef.current.getPeerConnection();
-          if (pc.remoteDescription && pc.remoteDescription.type) {
-            await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
-          } else {
-            userPendingIceRef.current.push(data.candidate);
-          }
+          await rtcManagerRef.current.addIceCandidate(data.candidate);
         } catch (err) {
           console.error('User ICE error:', err);
         }
@@ -549,8 +523,20 @@ function BulkPageContent() {
     setUserUploadStatus('Establishing P2P DataChannel to Host...');
     const socket = socketClient.getSocket();
 
+    let timeoutTimer: NodeJS.Timeout | null = null;
+    const clearTimeoutTimer = () => {
+      if (timeoutTimer) {
+        clearTimeout(timeoutTimer);
+        timeoutTimer = null;
+      }
+    };
+
     try {
-      const manager = new WebRTCPeerManager();
+      if (rtcManagerRef.current) {
+        rtcManagerRef.current.close();
+        rtcManagerRef.current = null;
+      }
+      const manager = await WebRTCPeerManager.create();
       rtcManagerRef.current = manager;
       const pc = manager.getPeerConnection();
 
@@ -563,9 +549,28 @@ function BulkPageContent() {
         }
       };
 
+      manager.onConnectionStateChange((state) => {
+        if (state === 'failed' || state === 'disconnected') {
+          clearTimeoutTimer();
+          setUserUploadStatus('P2P connection lost or failed to connect to Host. Please retry.');
+        }
+      });
+
+      // 15-second timeout for establishing P2P DataChannel
+      timeoutTimer = setTimeout(() => {
+        const currentDc = manager.getDataChannel();
+        if (!currentDc || currentDc.readyState !== 'open') {
+          console.warn('[WebRTC] P2P DataChannel connection timed out after 15s');
+          manager.close();
+          rtcManagerRef.current = null;
+          setUserUploadStatus('Connection timed out. Could not establish P2P DataChannel to Host. Please retry.');
+        }
+      }, 15000);
+
       const dc = manager.createDataChannel('bulkFileTransfer');
 
       dc.onopen = async () => {
+        clearTimeoutTimer();
         setUserUploadStatus('Connected! Streaming files to Host...');
         const newlyTransferred: SubmittedFileItem[] = [];
 
@@ -612,6 +617,7 @@ function BulkPageContent() {
         studentName: userName.trim(),
       });
     } catch (err) {
+      clearTimeoutTimer();
       console.error('User Bulk WebRTC error:', err);
       setUserUploadStatus('Upload failed. Please retry.');
     }

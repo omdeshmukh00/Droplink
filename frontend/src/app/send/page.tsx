@@ -221,10 +221,20 @@ export default function SendPage() {
 
     socket.emit('join-transfer-room', { roomKey });
 
-    const manager = new WebRTCPeerManager();
-    rtcManagerRef.current = manager;
+    let isSubscribed = true;
 
-    const pc = manager.getPeerConnection();
+    if (rtcManagerRef.current) {
+      rtcManagerRef.current.close();
+      rtcManagerRef.current = null;
+    }
+
+    WebRTCPeerManager.create().then((manager) => {
+      if (!isSubscribed) {
+        manager.close();
+        return;
+      }
+      rtcManagerRef.current = manager;
+      const pc = manager.getPeerConnection();
 
     pc.onicecandidate = (event) => {
       if (event.candidate) {
@@ -263,7 +273,7 @@ export default function SendPage() {
       try {
         setConnectionState('connecting');
         setStatusMessage('Connecting to receiver...');
-        await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+        await manager.setRemoteDescription(data.offer);
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
 
@@ -278,7 +288,7 @@ export default function SendPage() {
 
     socket.on('webrtc-answer', async (data: { answer: RTCSessionDescriptionInit }) => {
       try {
-        await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+        await manager.setRemoteDescription(data.answer);
       } catch (err) {
         console.error('Failed to set remote description from answer:', err);
       }
@@ -286,9 +296,7 @@ export default function SendPage() {
 
     socket.on('webrtc-ice-candidate', async (data: { candidate: RTCIceCandidateInit }) => {
       try {
-        if (pc.remoteDescription) {
-          await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
-        }
+        await manager.addIceCandidate(data.candidate);
       } catch (err) {
         console.error('Failed to add ICE candidate:', err);
       }
@@ -305,14 +313,19 @@ export default function SendPage() {
         startWebRTCTransfer(manager);
       };
     };
+    });
 
     return () => {
+      isSubscribed = false;
       socket.off('webrtc-offer');
       socket.off('webrtc-answer');
       socket.off('webrtc-ice-candidate');
       socket.off('pairing-required');
       socket.emit('leave-transfer-room', { roomKey });
-      manager.close();
+      if (rtcManagerRef.current) {
+        rtcManagerRef.current.close();
+        rtcManagerRef.current = null;
+      }
     };
   }, [shareData, autoVerify]);
 
