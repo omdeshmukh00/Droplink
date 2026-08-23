@@ -276,8 +276,7 @@ export default function SendPage() {
         setConnectionState('connecting');
         setStatusMessage('Connecting to receiver...');
         await manager.setRemoteDescription(data.offer);
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
+        const answer = await manager.createAnswer();
 
         socket.emit('webrtc-answer', {
           roomKey,

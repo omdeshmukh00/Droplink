@@ -261,7 +261,7 @@ function BulkPageContent() {
 
         pc.ondatachannel = (event) => {
           const channel = event.channel;
-          channel.binaryType = 'arraybuffer';
+          peerManager.setDataChannel(channel);
 
           let currentFileId: string | null = null;
           const transferMap = new Map<
@@ -343,22 +343,19 @@ function BulkPageContent() {
           };
         };
 
-        await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+        await peerManager.setRemoteDescription(new RTCSessionDescription(data.offer));
 
         // Process any queued ICE candidates for this senderSocketId
         const pendingIce = peerIceQueueRef.current.get(data.senderSocketId) || [];
         while (pendingIce.length > 0) {
           const cand = pendingIce.shift();
           if (cand) {
-            try {
-              await pc.addIceCandidate(new RTCIceCandidate(cand));
-            } catch (e) {}
+            await peerManager.addIceCandidate(cand);
           }
         }
         peerIceQueueRef.current.delete(data.senderSocketId);
 
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
+        const answer = await peerManager.createAnswer();
 
         socket.emit('bulk-webrtc-answer', {
           sessionId: hostSession.sessionId,
@@ -373,19 +370,16 @@ function BulkPageContent() {
     socket.on('bulk-webrtc-ice-candidate', async (data: { senderSocketId?: string; candidate: RTCIceCandidateInit }) => {
       if (!data?.candidate) return;
       const senderId = data.senderSocketId;
+      if (!senderId) return;
 
-      if (senderId && hostPeersRef.current.has(senderId)) {
+      if (hostPeersRef.current.has(senderId)) {
         const pm = hostPeersRef.current.get(senderId)!;
-        const pc = pm.getPeerConnection();
-        if (pc.remoteDescription && pc.remoteDescription.type) {
-          try {
-            await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
-          } catch (e) {}
-        } else {
-          const queue = peerIceQueueRef.current.get(senderId) || [];
-          queue.push(data.candidate);
-          peerIceQueueRef.current.set(senderId, queue);
-        }
+        await pm.addIceCandidate(data.candidate);
+      } else {
+        console.log(`[WEBRTC DEBUG] [${senderId}] Queuing early ICE candidate before host peerManager creation`);
+        const queue = peerIceQueueRef.current.get(senderId) || [];
+        queue.push(data.candidate);
+        peerIceQueueRef.current.set(senderId, queue);
       }
     });
 
@@ -520,12 +514,13 @@ function BulkPageContent() {
   const handleUserUpload = async () => {
     if (selectedUserFiles.length === 0 || !joinedSession) return;
 
-    setUserUploadStatus('Establishing P2P DataChannel to Host...');
+    setUserUploadStatus('Connecting to signaling network...');
     const socket = socketClient.getSocket();
 
     let timeoutTimer: NodeJS.Timeout | null = null;
     const clearTimeoutTimer = () => {
       if (timeoutTimer) {
+        console.log(`[WEBRTC DEBUG] [${rtcManagerRef.current?.getId() || 'user'}] transfer timeout cleared`);
         clearTimeout(timeoutTimer);
         timeoutTimer = null;
       }
@@ -552,29 +547,35 @@ function BulkPageContent() {
       manager.onConnectionStateChange(async (state) => {
         if (state === 'connected') {
           const details = await manager.logSelectedCandidatePair();
-          console.log(`[Bulk WebRTC] Connection Established (${details?.transportType || 'P2P'})`);
+          console.log(`[WEBRTC DEBUG] [${manager.getId()}] RTC CONNECTION CONNECTED (${details?.transportType || 'P2P'})`);
+          setUserUploadStatus(`RTC Connection Connected (${details?.transportType || 'P2P'}). Waiting for DataChannel...`);
         } else if (state === 'failed' || state === 'disconnected') {
           clearTimeoutTimer();
-          setUserUploadStatus('P2P connection lost or failed to connect to Host. Please retry.');
+          console.error(`[WEBRTC DEBUG] [${manager.getId()}] ICE FAILED`);
+          setUserUploadStatus('Connection lost or failed to connect to Host. Please retry.');
         }
       });
 
-      // 15-second timeout for establishing P2P DataChannel
+      const dc = manager.createDataChannel('bulkFileTransfer');
+
+      // 30-second timeout for establishing P2P DataChannel
+      console.log(`[WEBRTC DEBUG] [${manager.getId()}] transfer timeout started (30s)`);
       timeoutTimer = setTimeout(() => {
         const currentDc = manager.getDataChannel();
         if (!currentDc || currentDc.readyState !== 'open') {
-          console.warn('[WebRTC] P2P DataChannel connection timed out after 15s');
+          console.warn(`[WEBRTC DEBUG] [${manager.getId()}] DataChannel connection timed out after 30s`);
           manager.close();
           rtcManagerRef.current = null;
-          setUserUploadStatus('Connection timed out. Could not establish P2P DataChannel to Host. Please retry.');
+          setUserUploadStatus('Connection timed out. Could not establish DataChannel to Host. Please retry.');
+        } else {
+          console.log(`[WEBRTC DEBUG] [${manager.getId()}] Timeout fired but DataChannel is already OPEN`);
         }
-      }, 15000);
-
-      const dc = manager.createDataChannel('bulkFileTransfer');
+      }, 30000);
 
       dc.onopen = async () => {
         clearTimeoutTimer();
-        setUserUploadStatus('Connected! Streaming files to Host...');
+        console.log(`[WEBRTC DEBUG] [${manager.getId()}] DATA CHANNEL OPEN`);
+        setUserUploadStatus('DATA CHANNEL OPEN! Streaming files to Host...');
         const newlyTransferred: SubmittedFileItem[] = [];
 
         for (let i = 0; i < selectedUserFiles.length; i++) {
@@ -611,8 +612,11 @@ function BulkPageContent() {
         }, 1500);
       };
 
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
+      dc.onclose = () => {
+        console.log(`[WEBRTC DEBUG] [${manager.getId()}] DATA CHANNEL CLOSED`);
+      };
+
+      const offer = await manager.createOffer();
 
       socket.emit('bulk-webrtc-offer', {
         sessionId: joinedSession.sessionId,

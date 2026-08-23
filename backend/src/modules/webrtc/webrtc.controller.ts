@@ -3,18 +3,20 @@ import { env } from '../../config/env';
 import { HttpStatusCodes } from '../../constants/httpStatusCodes';
 
 export class WebRtcController {
-  public getIceConfig = (_req: Request, res: Response): Response => {
+  public getIceConfig = (req: Request, res: Response): Response => {
+    const isTurnOnly = req.query.turnOnly === 'true' || process.env.WEBRTC_FORCE_TURN_ONLY === 'true';
+
     const stunUrls = ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'];
 
     if (env.WEBRTC_STUN_URL && !stunUrls.includes(env.WEBRTC_STUN_URL)) {
       stunUrls.push(env.WEBRTC_STUN_URL);
     }
 
-    const iceServers: Array<{ urls: string | string[]; username?: string; credential?: string }> = [
-      {
-        urls: stunUrls,
-      },
-    ];
+    const iceServers: Array<{ urls: string | string[]; username?: string; credential?: string }> = [];
+
+    if (!isTurnOnly) {
+      iceServers.push({ urls: stunUrls });
+    }
 
     if (env.WEBRTC_TURN_URL && env.WEBRTC_TURN_URL.trim().length > 0) {
       const turnUrls = env.WEBRTC_TURN_URL.split(',')
@@ -33,12 +35,16 @@ export class WebRtcController {
       }
 
       iceServers.push(turnEntry);
+    } else if (isTurnOnly) {
+      // Fallback if TURN is forced but TURN config is missing: keep STUN
+      iceServers.push({ urls: stunUrls });
     }
 
     return res.status(HttpStatusCodes.OK).json({
       success: true,
       data: {
         iceServers,
+        isTurnOnlyMode: isTurnOnly,
       },
     });
   };

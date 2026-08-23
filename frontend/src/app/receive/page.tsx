@@ -184,8 +184,7 @@ export default function ReceivePage() {
           const dc = manager.createDataChannel('fileTransfer');
           setupDataChannel(dc);
 
-          const offer = await pc.createOffer();
-          await pc.setLocalDescription(offer);
+          const offer = await manager.createOffer();
 
           socket.emit('webrtc-offer', {
             roomKey,
