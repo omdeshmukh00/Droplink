@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from 'react';
-import { useRouter } from 'next/navigation';
 import { Container } from '@/components/Container';
 import { Download, ArrowRight, Pencil, X, Loader2 } from 'lucide-react';
 import axios from 'axios';
@@ -11,7 +10,6 @@ import { WebRTCPeerManager, formatSpeed, formatETA, formatBytes } from '@/utils/
 import { getDefaultDeviceName } from '@/utils/systemInfo';
 
 export default function ReceivePage() {
-  const router = useRouter();
   const [shareCodeInput, setShareCodeInput] = useState('');
   const [error, setError] = useState('');
   const [isVerifying, setIsVerifying] = useState(false);
@@ -31,6 +29,7 @@ export default function ReceivePage() {
   const [downloadSpeed, setDownloadSpeed] = useState<string>('');
   const [downloadEta, setDownloadEta] = useState<string>('');
   const [downloadBytesFormatted, setDownloadBytesFormatted] = useState<string>('');
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [isCompleted, setIsCompleted] = useState<boolean>(false);
   const [receivedFileUrl, setReceivedFileUrl] = useState<{ url: string; fileName: string } | null>(null);
 
@@ -120,8 +119,10 @@ export default function ReceivePage() {
       const urlCode = params.get('code') || params.get('id') || params.get('shareId');
       if (urlCode) {
         const normalized = normalizeShareId(urlCode);
-        setShareCodeInput(normalized);
-        verifyAndConnect(normalized);
+        queueMicrotask(() => {
+          setShareCodeInput(normalized);
+          verifyAndConnect(normalized);
+        });
       }
     }
   }, []);

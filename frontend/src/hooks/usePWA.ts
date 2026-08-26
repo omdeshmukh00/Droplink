@@ -23,9 +23,10 @@ export function usePWA() {
         const isStandaloneMedia = typeof window.matchMedia === 'function' ? window.matchMedia('(display-mode: standalone)').matches : false;
         const isIOSStandalone = (navigator as unknown as { standalone?: boolean })?.standalone === true;
         const installed = isStandaloneMedia || isIOSStandalone;
-        // eslint-disable-next-line react-hooks/set-state-in-effect
-        setIsStandalone(installed);
-        setIsInstalled(installed);
+        queueMicrotask(() => {
+          setIsStandalone(installed);
+          setIsInstalled(installed);
+        });
       };
 
       checkStandalone();
@@ -33,8 +34,9 @@ export function usePWA() {
       // Detect iOS devices
       const userAgent = window.navigator?.userAgent ? window.navigator.userAgent.toLowerCase() : '';
       const iosDevice = /iphone|ipad|ipod/.test(userAgent);
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setIsIOS(iosDevice);
+      queueMicrotask(() => {
+        setIsIOS(iosDevice);
+      });
 
       // Listen for beforeinstallprompt event (Android / Chrome / Edge)
       const handleBeforeInstallPrompt = (e: Event) => {

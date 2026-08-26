@@ -4,7 +4,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import Image from 'next/image';
-import { Menu, X, Info, ShieldCheck, Home, Sun, Moon, Users, Download, Sparkles } from 'lucide-react';
+import { Menu, X, Info, ShieldCheck, Home, Sun, Moon, Users, Download } from 'lucide-react';
 import { usePWA } from '@/hooks/usePWA';
 
 const GithubIcon = ({ className = "w-4 h-4" }: { className?: string }) => (

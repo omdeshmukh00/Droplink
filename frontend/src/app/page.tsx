@@ -4,7 +4,7 @@ import { Hero } from '@/components/Hero';
 import { SendCard } from '@/components/SendCard';
 import { ReceiveCard } from '@/components/ReceiveCard';
 import { BulkCard } from '@/components/BulkCard';
-import { Shield, QrCode, CreditCard, Users, Trash2 } from 'lucide-react';
+import { Shield, QrCode, CreditCard, Trash2 } from 'lucide-react';
 
 export default function Home() {
   return (

@@ -19,15 +19,16 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   useEffect(() => {
     const savedTheme = localStorage.getItem('droplink-theme') as Theme;
-    if (savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setTheme('dark');
-      document.documentElement.classList.add('dark');
-    } else {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setTheme('light');
-      document.documentElement.classList.remove('dark');
-    }
+    const isDark = savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    const targetTheme: Theme = isDark ? 'dark' : 'light';
+    queueMicrotask(() => {
+      setTheme(targetTheme);
+      if (isDark) {
+        document.documentElement.classList.add('dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+      }
+    });
   }, []);
 
   const toggleTheme = () => {

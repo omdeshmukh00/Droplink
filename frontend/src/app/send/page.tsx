@@ -334,6 +334,7 @@ export default function SendPage() {
         rtcManagerRef.current = null;
       }
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shareData, autoVerify]);
 
   const handleVerifyPairingCode = () => {

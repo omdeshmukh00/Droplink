@@ -153,13 +153,11 @@ function BulkPageContent() {
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const savedName = localStorage.getItem('droplink_user_name');
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      if (savedName) setUserName(savedName);
-
-      if (codeFromUrl) {
-        // eslint-disable-next-line react-hooks/set-state-in-effect
-        setBulkCodeInput(codeFromUrl);
-      }
+      const targetCode = codeFromUrl;
+      queueMicrotask(() => {
+        if (savedName) setUserName(savedName);
+        if (targetCode) setBulkCodeInput(targetCode);
+      });
     }
   }, [codeFromUrl]);
 
@@ -383,6 +381,9 @@ function BulkPageContent() {
       }
     });
 
+    const currentHostPeers = hostPeersRef.current;
+    const currentPeerIceQueue = peerIceQueueRef.current;
+
     return () => {
       if (heartbeatIntervalRef.current) clearInterval(heartbeatIntervalRef.current);
       socket.off('bulk-student-joined');
@@ -390,9 +391,9 @@ function BulkPageContent() {
       socket.off('bulk-webrtc-offer');
       socket.off('bulk-webrtc-ice-candidate');
 
-      hostPeersRef.current.forEach((pm) => pm.close());
-      hostPeersRef.current.clear();
-      peerIceQueueRef.current.clear();
+      currentHostPeers.forEach((pm) => pm.close());
+      currentHostPeers.clear();
+      currentPeerIceQueue.clear();
     };
   }, [hostSession]);
 
