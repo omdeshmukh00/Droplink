@@ -49,6 +49,37 @@ export class TransferController {
     return ApiResponse.success(res, data);
   });
 
+  public verifyShareId = asyncHandler(async (req: Request, res: Response) => {
+    const rawParam = req.params.shareId;
+    const shareId = typeof rawParam === 'string' ? rawParam : String(rawParam || '');
+    const cleanId = shareId.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+
+    if (!cleanId) {
+      return res.status(400).json({ success: false, message: 'ShareID is required' });
+    }
+
+    const socketService = (await import('../../../services/socket.service')).SocketService.getInstance();
+    const hasP2PSender = socketService.hasActiveRoom(`transfer:${cleanId}`) || socketService.hasActiveRoom(cleanId);
+
+    if (hasP2PSender) {
+      return ApiResponse.success(res, { valid: true, mode: 'p2p' });
+    }
+
+    try {
+      const data = await this.service.getTransferByShareId(cleanId);
+      if (data) {
+        return ApiResponse.success(res, { valid: true, mode: 'cloud', data });
+      }
+    } catch {
+      // Ignore
+    }
+
+    return res.status(404).json({
+      success: false,
+      message: 'ShareID is Invalid',
+    });
+  });
+
   public getStatus = asyncHandler(async (req: Request, res: Response) => {
     const rawParam = req.params.token;
     const token = typeof rawParam === 'string' ? rawParam : String(rawParam || '');

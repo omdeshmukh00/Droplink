@@ -149,7 +149,7 @@ export class WebRTCPeerManager {
           console.log(`[WEBRTC DEBUG] [${this.id}] RTC CONNECTION CONNECTED`);
           this.logSelectedCandidatePair();
         } else if (state === 'failed') {
-          console.error(`[WEBRTC DEBUG] [${this.id}] ICE FAILED`);
+          console.warn(`[WEBRTC DEBUG] [${this.id}] ICE FAILED`);
         }
         if (this.onStateChangeCb) {
           this.onStateChangeCb(state);
@@ -351,7 +351,7 @@ export class WebRTCPeerManager {
       console.log(`[WEBRTC DEBUG] [${this.id}] dataChannel.readyState -> ${dc.readyState}`);
     });
     dc.addEventListener('error', (err) => {
-      console.error(`[WEBRTC DEBUG] [${this.id}] dataChannel error (label: ${dc.label}):`, err);
+      console.warn(`[WEBRTC DEBUG] [${this.id}] dataChannel error (label: ${dc.label}):`, err);
     });
   }
 

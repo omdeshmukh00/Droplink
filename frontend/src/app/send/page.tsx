@@ -183,7 +183,7 @@ export default function SendPage() {
       const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000';
       const data = {
         shareId: randomId,
-        shareUrl: `${origin}/download/${randomId}`,
+        shareUrl: `${origin}/receive?code=${randomId}`,
         roomKey: `transfer:${randomId}`,
       };
       setShareData(data);

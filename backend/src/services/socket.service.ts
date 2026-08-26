@@ -25,6 +25,12 @@ export class SocketService {
     return SocketService.instance;
   }
 
+  public hasActiveRoom(roomKey: string): boolean {
+    if (!this.socketNamespace) return false;
+    const room = this.socketNamespace.adapter.rooms.get(roomKey);
+    return !!(room && room.size > 0);
+  }
+
   /**
    * Initializes Socket.IO server and binds to /socket namespace.
    */
@@ -228,6 +234,37 @@ export class SocketService {
           senderSocketId: socket.id,
           state: data.state,
         });
+      });
+
+      // Verify Share ID handler (P2P Room or DB Transfer check)
+      socket.on('verify-share-id', async (data: { shareId: string }, callback?: (res: { valid: boolean; mode?: string; message?: string }) => void) => {
+        const rawId = data?.shareId;
+        if (!rawId || typeof rawId !== 'string') {
+          if (typeof callback === 'function') callback({ valid: false, message: 'ShareID is Invalid' });
+          return;
+        }
+
+        const cleanId = rawId.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+        const primaryRoom = `transfer:${cleanId}`;
+
+        const isP2P = this.hasActiveRoom(primaryRoom) || this.hasActiveRoom(cleanId);
+        if (isP2P) {
+          if (typeof callback === 'function') callback({ valid: true, mode: 'p2p' });
+          return;
+        }
+
+        try {
+          const { transferService } = await import('../modules/transfer/services/transfer.service');
+          const transfer = await transferService.getTransferByShareId(cleanId);
+          if (transfer) {
+            if (typeof callback === 'function') callback({ valid: true, mode: 'cloud' });
+            return;
+          }
+        } catch {
+          // Not found in DB
+        }
+
+        if (typeof callback === 'function') callback({ valid: false, message: 'ShareID is Invalid' });
       });
 
       // Bulk Transfer WebRTC & Session Event Relays

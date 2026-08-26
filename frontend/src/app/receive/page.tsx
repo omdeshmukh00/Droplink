@@ -3,7 +3,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { Container } from '@/components/Container';
-import { Download, ArrowRight, Camera, Pencil, X } from 'lucide-react';
+import { Download, ArrowRight, Pencil, X, Loader2 } from 'lucide-react';
+import axios from 'axios';
+import { getApiUrl } from '@/config/api';
 import { socketClient } from '@/services/socketClient';
 import { WebRTCPeerManager, formatSpeed, formatETA, formatBytes } from '@/utils/webrtc';
 import { getDefaultDeviceName } from '@/utils/systemInfo';
@@ -12,6 +14,7 @@ export default function ReceivePage() {
   const router = useRouter();
   const [shareCodeInput, setShareCodeInput] = useState('');
   const [error, setError] = useState('');
+  const [isVerifying, setIsVerifying] = useState(false);
 
   // Device Name State & Modal
   const [receiverName, setReceiverName] = useState<string>('');
@@ -29,7 +32,7 @@ export default function ReceivePage() {
   const [downloadEta, setDownloadEta] = useState<string>('');
   const [downloadBytesFormatted, setDownloadBytesFormatted] = useState<string>('');
   const [isCompleted, setIsCompleted] = useState<boolean>(false);
-  const [showQrScanner, setShowQrScanner] = useState<boolean>(false);
+  const [receivedFileUrl, setReceivedFileUrl] = useState<{ url: string; fileName: string } | null>(null);
 
   const rtcManagerRef = useRef<WebRTCPeerManager | null>(null);
   const receivedChunksRef = useRef<ArrayBuffer[]>([]);
@@ -51,13 +54,77 @@ export default function ReceivePage() {
     }
   }, []);
 
-  // Normalize input string (ABC-92L-KJD -> ABC92LKJD)
+  // Normalize input string (ABC-92L-KJD -> ABC92LKJD or URL link with query param)
   const normalizeShareId = (input: string): string => {
     const cleaned = input.trim();
-    const linkMatch = cleaned.match(/download\/([a-zA-Z0-9_-]+)/);
+    const linkMatch =
+      cleaned.match(/(?:download|receive)\/([a-zA-Z0-9_-]+)/) ||
+      cleaned.match(/(?:code|id|shareId)=([a-zA-Z0-9_-]+)/);
     const raw = linkMatch ? linkMatch[1] : cleaned;
     return raw.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
   };
+
+  const verifyAndConnect = async (normalized: string) => {
+    setError('');
+    setIsVerifying(true);
+
+    try {
+      const apiUrl = getApiUrl();
+      let isValid = false;
+
+      // 1. Verify via HTTP Endpoint
+      try {
+        const res = await axios.get(`${apiUrl}/transfers/verify/${normalized}`);
+        if (res.data?.success && res.data?.data?.valid) {
+          isValid = true;
+        }
+      } catch {
+        // Fallback to socket verification
+      }
+
+      // 2. Fallback check via Socket verify-share-id
+      if (!isValid) {
+        const socket = socketClient.getSocket();
+        const socketCheck = await new Promise<{ valid: boolean; message?: string }>((resolve) => {
+          const timer = setTimeout(() => resolve({ valid: false, message: 'ShareID is Invalid' }), 2500);
+          socket.emit('verify-share-id', { shareId: normalized }, (response: { valid: boolean; message?: string }) => {
+            clearTimeout(timer);
+            resolve(response || { valid: false, message: 'ShareID is Invalid' });
+          });
+        });
+
+        if (socketCheck.valid) {
+          isValid = true;
+        }
+      }
+
+      if (isValid) {
+        const code = Math.floor(1000 + Math.random() * 9000).toString();
+        setPairingCode(code);
+        setActiveShareId(normalized);
+        setConnectionStatus('Connecting to signaling network...');
+      } else {
+        setError('ShareID is Invalid');
+      }
+    } catch {
+      setError('ShareID is Invalid');
+    } finally {
+      setIsVerifying(false);
+    }
+  };
+
+  // Check URL query parameters on initial page load (e.g. /receive?code=866319362)
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const urlCode = params.get('code') || params.get('id') || params.get('shareId');
+      if (urlCode) {
+        const normalized = normalizeShareId(urlCode);
+        setShareCodeInput(normalized);
+        verifyAndConnect(normalized);
+      }
+    }
+  }, []);
 
   const handleStartReceive = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -68,11 +135,7 @@ export default function ReceivePage() {
       return;
     }
 
-    setError('');
-    const code = Math.floor(1000 + Math.random() * 9000).toString();
-    setPairingCode(code);
-    setActiveShareId(normalized);
-    setConnectionStatus('Connecting to signaling network...');
+    verifyAndConnect(normalized);
   };
 
   function setupDataChannel(dc: RTCDataChannel) {
@@ -95,24 +158,26 @@ export default function ReceivePage() {
             transferStartTimeRef.current = Date.now();
             setConnectionStatus(`Receiving '${parsed.fileName}' via WebRTC P2P...`);
           } else if (parsed.type === 'eof') {
-            // Reassemble file Blob and trigger download
+            // Reassemble file Blob and store object URL for download
             if (currentFileMetaRef.current && receivedChunksRef.current.length > 0) {
+              const fileName = currentFileMetaRef.current.fileName;
               const blob = new Blob(receivedChunksRef.current, {
                 type: currentFileMetaRef.current.mimeType,
               });
 
               const url = URL.createObjectURL(blob);
+              setReceivedFileUrl({ url, fileName });
+
               const a = document.createElement('a');
               a.href = url;
-              a.download = currentFileMetaRef.current.fileName;
+              a.download = fileName;
               document.body.appendChild(a);
               a.click();
               document.body.removeChild(a);
-              URL.revokeObjectURL(url);
 
               setIsCompleted(true);
               setDownloadProgress(100);
-              setConnectionStatus(`'${currentFileMetaRef.current.fileName}' downloaded successfully!`);
+              setConnectionStatus(`'${fileName}' downloaded successfully!`);
             }
           }
         } catch {
@@ -249,7 +314,7 @@ export default function ReceivePage() {
           Receive Files
         </h1>
         <p className="text-slate-600 text-sm sm:text-base">
-          Enter Share ID (e.g. ABC92LKJD or ABC-92L-KJD) or scan QR code to receive P2P files directly.
+          Enter Share ID (e.g. ABC92LKJD or ABC-92L-KJD) to receive P2P files directly.
         </p>
       </div>
 
@@ -299,23 +364,21 @@ export default function ReceivePage() {
 
             <button
               type="submit"
-              className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3.5 px-6 rounded-2xl shadow-md transition-all flex items-center justify-center gap-2"
+              disabled={isVerifying}
+              className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed text-white font-bold py-3.5 px-6 rounded-2xl shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer"
             >
-              Connect to Transfer
-              <ArrowRight className="w-4 h-4" />
+              {isVerifying ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Verifying Code...
+                </>
+              ) : (
+                <>
+                  Connect to Transfer
+                  <ArrowRight className="w-4 h-4" />
+                </>
+              )}
             </button>
-
-            {/* Alternative Scan QR option */}
-            <div className="mt-6 pt-6 border-t border-emerald-200/60 text-center">
-              <button
-                type="button"
-                onClick={() => setShowQrScanner(!showQrScanner)}
-                className="inline-flex items-center gap-2 text-xs font-bold text-emerald-700 hover:text-emerald-800 uppercase tracking-wider"
-              >
-                <Camera className="w-4 h-4" />
-                <span>{showQrScanner ? 'Close Camera Scanner' : 'Scan QR Code with Camera'}</span>
-              </button>
-            </div>
           </form>
         ) : (
           <div className="space-y-6 text-center">
@@ -357,6 +420,18 @@ export default function ReceivePage() {
                   </div>
                 </div>
               )}
+
+              {/* Download Button right after the progress bar */}
+              {receivedFileUrl && (
+                <a
+                  href={receivedFileUrl.url}
+                  download={receivedFileUrl.fileName}
+                  className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 px-6 rounded-2xl shadow-md transition-all flex items-center justify-center gap-2 text-sm mt-3"
+                >
+                  <Download className="w-5 h-5" />
+                  <span>Download File</span>
+                </a>
+              )}
             </div>
 
             <button
@@ -364,8 +439,9 @@ export default function ReceivePage() {
                 setActiveShareId(null);
                 setDownloadProgress(0);
                 setIsCompleted(false);
+                setReceivedFileUrl(null);
               }}
-              className="text-sm font-semibold text-emerald-700 hover:text-emerald-800 underline"
+              className="text-sm font-semibold text-emerald-700 hover:text-emerald-800 underline block mx-auto pt-2"
             >
               Receive Another File
             </button>

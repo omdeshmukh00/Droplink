@@ -36,6 +36,9 @@ const router = Router();
 // POST /api/v1/transfers - Create transfer & upload files
 router.post('/', upload.array('files', env.MAX_FILES), transferController.create);
 
+// GET /api/v1/transfers/verify/:shareId - Verify if Share ID is valid
+router.get('/verify/:shareId', transferController.verifyShareId);
+
 // GET /api/v1/transfers/share/:shareId - Lookup metadata by Share ID
 router.get('/share/:shareId', transferController.getByShareId);
 
