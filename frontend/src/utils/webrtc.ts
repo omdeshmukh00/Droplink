@@ -3,8 +3,16 @@ import { getApiUrl } from '../config/api';
 
 export const DEFAULT_STUN_CONFIG: RTCConfiguration = {
   iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
+    {
+      urls: [
+        'stun:stun.l.google.com:19302',
+        'stun:stun1.l.google.com:19302',
+        'stun:stun2.l.google.com:19302',
+        'stun:stun3.l.google.com:19302',
+        'stun:stun4.l.google.com:19302',
+        'stun:stun.services.mozilla.com',
+      ],
+    },
   ],
 };
 
@@ -49,8 +57,34 @@ export async function fetchIceConfiguration(options?: { turnOnly?: boolean }): P
   return DEFAULT_STUN_CONFIG;
 }
 
-export const CHUNK_SIZE = 32768; // 32KB per chunk for optimal cross-browser SCTP throughput
+export const CHUNK_SIZE = 16384; // 16KB per chunk for optimal cross-browser SCTP throughput
 export const BLOCK_SIZE = 1024 * 1024; // 1MB block size for in-memory slicing
+
+export function formatSpeed(bytesPerSec: number): string {
+  if (!bytesPerSec || bytesPerSec <= 0) return '0 B/s';
+  if (bytesPerSec < 1024) return `${bytesPerSec} B/s`;
+  if (bytesPerSec < 1024 * 1024) return `${(bytesPerSec / 1024).toFixed(1)} KB/s`;
+  if (bytesPerSec < 1024 * 1024 * 1024) return `${(bytesPerSec / (1024 * 1024)).toFixed(1)} MB/s`;
+  return `${(bytesPerSec / (1024 * 1024 * 1024)).toFixed(1)} GB/s`;
+}
+
+export function formatETA(seconds: number): string {
+  if (!seconds || !isFinite(seconds) || seconds <= 0) return '0s';
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  if (mins > 0) {
+    return `${mins}m ${secs}s`;
+  }
+  return `${secs}s`;
+}
+
+export function formatBytes(bytes: number): string {
+  if (bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
+}
 
 export interface WebRTCTransferProgress {
   fileId: string;
@@ -58,6 +92,11 @@ export interface WebRTCTransferProgress {
   bytesTransferred: number;
   totalBytes: number;
   percentage: number;
+  speedBytesPerSec: number;
+  speedFormatted: string;
+  etaSeconds: number;
+  etaFormatted: string;
+  bytesFormatted: string;
 }
 
 export type WebRTCConnectionStateCallback = (state: RTCPeerConnectionState, readyStateLabel?: string) => void;
@@ -358,18 +397,34 @@ export class WebRTCPeerManager {
     });
     channel.send(header);
 
+    const startTime = Date.now();
     let offset = 0;
     const totalSize = file.size;
     let lastProgressTime = 0;
 
-    if (totalSize === 0 && onProgress) {
-      onProgress({
+    const buildProgressPayload = (bytes: number): WebRTCTransferProgress => {
+      const now = Date.now();
+      const elapsedSec = (now - startTime) / 1000;
+      const speedBytesPerSec = elapsedSec > 0 ? Math.round(bytes / elapsedSec) : 0;
+      const remainingBytes = Math.max(0, totalSize - bytes);
+      const etaSeconds = speedBytesPerSec > 0 ? Math.ceil(remainingBytes / speedBytesPerSec) : 0;
+
+      return {
         fileId,
         fileName: file.name,
-        bytesTransferred: 0,
-        totalBytes: 0,
-        percentage: 100,
-      });
+        bytesTransferred: bytes,
+        totalBytes: totalSize,
+        percentage: totalSize === 0 ? 100 : Math.min(100, Math.round((bytes / totalSize) * 100)),
+        speedBytesPerSec,
+        speedFormatted: formatSpeed(speedBytesPerSec),
+        etaSeconds,
+        etaFormatted: formatETA(etaSeconds),
+        bytesFormatted: `${formatBytes(bytes)} / ${formatBytes(totalSize)}`,
+      };
+    };
+
+    if (totalSize === 0 && onProgress) {
+      onProgress(buildProgressPayload(0));
     }
 
     while (offset < totalSize) {
@@ -402,25 +457,13 @@ export class WebRTCPeerManager {
         const now = Date.now();
         if (onProgress && (now - lastProgressTime > 100 || offset >= totalSize)) {
           lastProgressTime = now;
-          onProgress({
-            fileId,
-            fileName: file.name,
-            bytesTransferred: offset,
-            totalBytes: totalSize,
-            percentage: Math.min(100, Math.round((offset / totalSize) * 100)),
-          });
+          onProgress(buildProgressPayload(offset));
         }
       }
     }
 
     if (totalSize > 0 && onProgress) {
-      onProgress({
-        fileId,
-        fileName: file.name,
-        bytesTransferred: totalSize,
-        totalBytes: totalSize,
-        percentage: 100,
-      });
+      onProgress(buildProgressPayload(totalSize));
     }
 
     // Send EOF marker

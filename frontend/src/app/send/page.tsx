@@ -78,6 +78,9 @@ export default function SendPage() {
   // Transfer progress
   const [transferProgress, setTransferProgress] = useState<number>(0);
   const [currentFileName, setCurrentFileName] = useState<string>('');
+  const [transferSpeed, setTransferSpeed] = useState<string>('');
+  const [transferEta, setTransferEta] = useState<string>('');
+  const [transferBytes, setTransferBytes] = useState<string>('');
   const [isCloudUploading, setIsCloudUploading] = useState(false);
 
   const rtcManagerRef = useRef<WebRTCPeerManager | null>(null);
@@ -200,6 +203,9 @@ export default function SendPage() {
         await manager.sendFile(file, fileId, (prog: WebRTCTransferProgress) => {
           const overall = Math.round(((i + prog.percentage / 100) / selectedFiles.length) * 100);
           setTransferProgress(overall);
+          if (prog.speedFormatted) setTransferSpeed(prog.speedFormatted);
+          if (prog.etaFormatted) setTransferEta(prog.etaFormatted);
+          if (prog.bytesFormatted) setTransferBytes(prog.bytesFormatted);
         });
       }
 
@@ -709,16 +715,23 @@ export default function SendPage() {
 
           {/* Progress Bar (during WebRTC or Cloud Transfer) */}
           {(connectionState === 'transferring' || connectionState === 'fallback') && (
-            <div className="space-y-2 text-left">
-              <div className="flex justify-between text-xs font-bold text-slate-600">
-                <span className="truncate max-w-[200px]">{currentFileName || 'Transferring...'}</span>
+            <div className="space-y-2 text-left bg-slate-50 p-3.5 rounded-2xl border border-slate-200">
+              <div className="flex justify-between text-xs font-bold text-slate-700">
+                <span className="truncate max-w-[180px]">{currentFileName || 'Transferring...'}</span>
                 <span>{transferProgress}%</span>
               </div>
-              <div className="w-full bg-slate-100 rounded-full h-3 overflow-hidden border border-slate-200">
+              <div className="w-full bg-slate-200 rounded-full h-3 overflow-hidden border border-slate-300">
                 <div
                   className="bg-blue-600 h-full transition-all duration-300 ease-out"
                   style={{ width: `${transferProgress}%` }}
                 />
+              </div>
+              <div className="flex items-center justify-between text-2xs font-semibold text-slate-500 pt-0.5">
+                <span>{transferBytes}</span>
+                <div className="flex items-center gap-2 font-mono">
+                  {transferSpeed && <span className="text-blue-600 font-bold">{transferSpeed}</span>}
+                  {transferEta && <span className="text-slate-600">ETA: {transferEta}</span>}
+                </div>
               </div>
             </div>
           )}

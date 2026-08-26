@@ -8,9 +8,10 @@
  */
 export function getBackendUrl(): string {
   if (process.env.NEXT_PUBLIC_API_URL) {
-    let url = process.env.NEXT_PUBLIC_API_URL;
+    let url = process.env.NEXT_PUBLIC_API_URL.trim();
     url = url.replace(/\/+$/, '');
-    url = url.replace(/\/api\/v1$/, '');
+    url = url.replace(/(\/)?api\/v1$/, '');
+    url = url.replace(/\/+$/, '');
     return url;
   }
 

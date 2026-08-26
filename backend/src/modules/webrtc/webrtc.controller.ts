@@ -6,7 +6,14 @@ export class WebRtcController {
   public getIceConfig = (req: Request, res: Response): Response => {
     const isTurnOnly = req.query.turnOnly === 'true' || process.env.WEBRTC_FORCE_TURN_ONLY === 'true';
 
-    const stunUrls = ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'];
+    const stunUrls = [
+      'stun:stun.l.google.com:19302',
+      'stun:stun1.l.google.com:19302',
+      'stun:stun2.l.google.com:19302',
+      'stun:stun3.l.google.com:19302',
+      'stun:stun4.l.google.com:19302',
+      'stun:stun.services.mozilla.com',
+    ];
 
     if (env.WEBRTC_STUN_URL && !stunUrls.includes(env.WEBRTC_STUN_URL)) {
       stunUrls.push(env.WEBRTC_STUN_URL);

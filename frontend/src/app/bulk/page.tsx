@@ -70,7 +70,7 @@ function BulkPageContent() {
 
   // User Upload State
   const [selectedUserFiles, setSelectedUserFiles] = useState<File[]>([]);
-  const [uploadProgressMap, setUploadProgressMap] = useState<Record<string, number>>({});
+  const [uploadProgressMap, setUploadProgressMap] = useState<Record<string, { percentage: number; speed?: string; eta?: string; bytes?: string }>>({});
   const [userUploadStatus, setUserUploadStatus] = useState<string>('');
   const [submittedUserFiles, setSubmittedUserFiles] = useState<SubmittedFileItem[]>([]);
 
@@ -345,7 +345,9 @@ function BulkPageContent() {
 
         await peerManager.setRemoteDescription(new RTCSessionDescription(data.offer));
 
-        // Process any queued ICE candidates for this senderSocketId
+        const answer = await peerManager.createAnswer();
+
+        // Process any queued ICE candidates for this senderSocketId after setting local description answer
         const pendingIce = peerIceQueueRef.current.get(data.senderSocketId) || [];
         while (pendingIce.length > 0) {
           const cand = pendingIce.shift();
@@ -354,8 +356,6 @@ function BulkPageContent() {
           }
         }
         peerIceQueueRef.current.delete(data.senderSocketId);
-
-        const answer = await peerManager.createAnswer();
 
         socket.emit('bulk-webrtc-answer', {
           sessionId: hostSession.sessionId,
@@ -549,10 +549,12 @@ function BulkPageContent() {
           const details = await manager.logSelectedCandidatePair();
           console.log(`[WEBRTC DEBUG] [${manager.getId()}] RTC CONNECTION CONNECTED (${details?.transportType || 'P2P'})`);
           setUserUploadStatus(`RTC Connection Connected (${details?.transportType || 'P2P'}). Waiting for DataChannel...`);
-        } else if (state === 'failed' || state === 'disconnected') {
+        } else if (state === 'failed') {
           clearTimeoutTimer();
           console.error(`[WEBRTC DEBUG] [${manager.getId()}] ICE FAILED`);
           setUserUploadStatus('Connection lost or failed to connect to Host. Please retry.');
+        } else if (state === 'disconnected') {
+          console.warn(`[WEBRTC DEBUG] [${manager.getId()}] RTC Connection transiently disconnected, awaiting reconnect...`);
         }
       });
 
@@ -586,7 +588,15 @@ function BulkPageContent() {
             file,
             fileId,
             (prog: WebRTCTransferProgress) => {
-              setUploadProgressMap((prev) => ({ ...prev, [file.name]: prog.percentage }));
+              setUploadProgressMap((prev) => ({
+                ...prev,
+                [file.name]: {
+                  percentage: prog.percentage,
+                  speed: prog.speedFormatted,
+                  eta: prog.etaFormatted,
+                  bytes: prog.bytesFormatted,
+                },
+              }));
             },
             {
               studentName: userName.trim(),
@@ -595,7 +605,10 @@ function BulkPageContent() {
             }
           );
 
-          setUploadProgressMap((prev) => ({ ...prev, [file.name]: 100 }));
+          setUploadProgressMap((prev) => ({
+            ...prev,
+            [file.name]: { ...(prev[file.name] || {}), percentage: 100 },
+          }));
           newlyTransferred.push({
             fileName: file.name,
             size: file.size,
@@ -909,20 +922,24 @@ function BulkPageContent() {
                         <td className="p-3 font-bold text-slate-900">{file.displayName}</td>
                         <td className="p-3 font-mono truncate max-w-xs">{file.fileName}</td>
                         <td className="p-3 text-slate-500 font-mono">{formatFileSize(file.size)}</td>
-                        <td className="p-3 text-right space-x-2">
-                          <button
-                            onClick={() => handleDownloadSingleFile(file)}
-                            className="bg-blue-50 text-blue-600 hover:bg-blue-100 font-bold px-3 py-1.5 rounded-lg transition-colors"
-                          >
-                            Download
-                          </button>
-                          <button
-                            onClick={() => handleDeleteSingleFile(file.fileId)}
-                            className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
-                            title="Delete file"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                        <td className="p-3 text-right">
+                          <div className="flex items-center justify-end gap-1.5 whitespace-nowrap">
+                            <button
+                              onClick={() => handleDownloadSingleFile(file)}
+                              className="bg-blue-50 text-blue-600 hover:bg-blue-100 font-bold px-2.5 py-1.5 rounded-lg transition-colors flex items-center gap-1 text-xs shadow-2xs cursor-pointer"
+                              title="Download file"
+                            >
+                              <Download className="w-4 h-4 shrink-0 text-blue-600" />
+                              <span className="hidden sm:inline">Download</span>
+                            </button>
+                            <button
+                              onClick={() => handleDeleteSingleFile(file.fileId)}
+                              className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg transition-colors shrink-0 cursor-pointer"
+                              title="Delete file"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -1124,30 +1141,43 @@ function BulkPageContent() {
               </div>
             ) : (
               <div className="space-y-2 max-h-[260px] overflow-y-auto pr-1">
-                {selectedUserFiles.map((file, idx) => (
-                  <div key={idx} className="bg-slate-50 p-3 rounded-xl border border-slate-200 text-xs space-y-1.5 shadow-2xs">
-                    <div className="flex items-center justify-between font-bold text-slate-800">
-                      <span className="truncate max-w-[180px]">{file.name}</span>
-                      <div className="flex items-center gap-2 shrink-0">
-                        <span>{uploadProgressMap[file.name] || 0}%</span>
-                        <button
-                          type="button"
-                          onClick={() => setSelectedUserFiles((prev) => prev.filter((_, i) => i !== idx))}
-                          className="text-slate-400 hover:text-rose-600 transition-colors p-0.5 rounded-md cursor-pointer"
-                          title="Remove file"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                {selectedUserFiles.map((file, idx) => {
+                  const progInfo = uploadProgressMap[file.name];
+                  const percentage = progInfo?.percentage || 0;
+                  return (
+                    <div key={idx} className="bg-slate-50 p-3 rounded-xl border border-slate-200 text-xs space-y-1.5 shadow-2xs">
+                      <div className="flex items-center justify-between font-bold text-slate-800">
+                        <span className="truncate max-w-[180px]">{file.name}</span>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span>{percentage}%</span>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedUserFiles((prev) => prev.filter((_, i) => i !== idx))}
+                            className="text-slate-400 hover:text-rose-600 transition-colors p-0.5 rounded-md cursor-pointer"
+                            title="Remove file"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </div>
+                      <div className="w-full bg-slate-200 rounded-full h-2 overflow-hidden">
+                        <div
+                          className="bg-purple-600 h-full transition-all duration-300"
+                          style={{ width: `${percentage}%` }}
+                        />
+                      </div>
+                      {progInfo && (progInfo.bytes || progInfo.speed) && (
+                        <div className="flex items-center justify-between text-2xs font-semibold text-slate-500 pt-0.5">
+                          <span>{progInfo.bytes || ''}</span>
+                          <div className="flex items-center gap-2 font-mono">
+                            {progInfo.speed && <span className="text-purple-700 font-bold">{progInfo.speed}</span>}
+                            {progInfo.eta && <span className="text-slate-600">ETA: {progInfo.eta}</span>}
+                          </div>
+                        </div>
+                      )}
                     </div>
-                    <div className="w-full bg-slate-200 rounded-full h-2 overflow-hidden">
-                      <div
-                        className="bg-purple-600 h-full transition-all duration-300"
-                        style={{ width: `${uploadProgressMap[file.name] || 0}%` }}
-                      />
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
 

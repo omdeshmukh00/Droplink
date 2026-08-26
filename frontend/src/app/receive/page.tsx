@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Container } from '@/components/Container';
 import { Download, ArrowRight, Camera, Pencil, X } from 'lucide-react';
 import { socketClient } from '@/services/socketClient';
-import { WebRTCPeerManager } from '@/utils/webrtc';
+import { WebRTCPeerManager, formatSpeed, formatETA, formatBytes } from '@/utils/webrtc';
 import { getDefaultDeviceName } from '@/utils/systemInfo';
 
 export default function ReceivePage() {
@@ -25,12 +25,16 @@ export default function ReceivePage() {
   const [connectionStatus, setConnectionStatus] = useState<string>('');
   const [downloadProgress, setDownloadProgress] = useState<number>(0);
   const [downloadFileName, setDownloadFileName] = useState<string>('');
+  const [downloadSpeed, setDownloadSpeed] = useState<string>('');
+  const [downloadEta, setDownloadEta] = useState<string>('');
+  const [downloadBytesFormatted, setDownloadBytesFormatted] = useState<string>('');
   const [isCompleted, setIsCompleted] = useState<boolean>(false);
   const [showQrScanner, setShowQrScanner] = useState<boolean>(false);
 
   const rtcManagerRef = useRef<WebRTCPeerManager | null>(null);
   const receivedChunksRef = useRef<ArrayBuffer[]>([]);
   const currentFileMetaRef = useRef<{ fileName: string; mimeType: string; size: number } | null>(null);
+  const transferStartTimeRef = useRef<number | null>(null);
 
   // Initialize Receiver Name
   useEffect(() => {
@@ -88,6 +92,7 @@ export default function ReceivePage() {
             };
             setDownloadFileName(parsed.fileName);
             receivedChunksRef.current = [];
+            transferStartTimeRef.current = Date.now();
             setConnectionStatus(`Receiving '${parsed.fileName}' via WebRTC P2P...`);
           } else if (parsed.type === 'eof') {
             // Reassemble file Blob and trigger download
@@ -114,12 +119,24 @@ export default function ReceivePage() {
           // Plain string message
         }
       } else if (event.data instanceof ArrayBuffer) {
+        if (!transferStartTimeRef.current) {
+          transferStartTimeRef.current = Date.now();
+        }
         receivedChunksRef.current.push(event.data);
         const meta = currentFileMetaRef.current;
         if (meta) {
           const receivedBytes = receivedChunksRef.current.reduce((acc, c) => acc + c.byteLength, 0);
           const percent = Math.min(100, Math.round((receivedBytes / meta.size) * 100));
           setDownloadProgress(percent);
+
+          const elapsedSec = (Date.now() - transferStartTimeRef.current) / 1000;
+          const speedBytes = elapsedSec > 0 ? Math.round(receivedBytes / elapsedSec) : 0;
+          const remainingBytes = Math.max(0, meta.size - receivedBytes);
+          const etaSec = speedBytes > 0 ? Math.ceil(remainingBytes / speedBytes) : 0;
+
+          setDownloadSpeed(formatSpeed(speedBytes));
+          setDownloadEta(formatETA(etaSec));
+          setDownloadBytesFormatted(`${formatBytes(receivedBytes)} / ${formatBytes(meta.size)}`);
         }
       }
     };
@@ -320,16 +337,23 @@ export default function ReceivePage() {
 
               {/* Progress Bar */}
               {downloadProgress > 0 && (
-                <div className="space-y-1.5 pt-2 text-left">
-                  <div className="flex justify-between text-xs font-bold text-slate-600">
-                    <span className="truncate max-w-[200px]">{downloadFileName}</span>
+                <div className="space-y-2 pt-2 text-left bg-slate-50 p-3.5 rounded-2xl border border-slate-200">
+                  <div className="flex justify-between text-xs font-bold text-slate-700">
+                    <span className="truncate max-w-[180px]">{downloadFileName}</span>
                     <span>{downloadProgress}%</span>
                   </div>
-                  <div className="w-full bg-slate-100 rounded-full h-3 overflow-hidden border border-slate-200">
+                  <div className="w-full bg-slate-200 rounded-full h-3 overflow-hidden border border-slate-300">
                     <div
                       className="bg-emerald-600 h-full transition-all duration-300 ease-out"
                       style={{ width: `${downloadProgress}%` }}
                     />
+                  </div>
+                  <div className="flex items-center justify-between text-2xs font-semibold text-slate-500 pt-0.5">
+                    <span>{downloadBytesFormatted}</span>
+                    <div className="flex items-center gap-2 font-mono">
+                      {downloadSpeed && <span className="text-emerald-700 font-bold">{downloadSpeed}</span>}
+                      {downloadEta && <span className="text-slate-600">ETA: {downloadEta}</span>}
+                    </div>
                   </div>
                 </div>
               )}
