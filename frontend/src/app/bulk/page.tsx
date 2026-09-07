@@ -211,6 +211,25 @@ function BulkPageContent() {
       socket.emit('bulk-host-heartbeat', { sessionId: hostSession.sessionId });
     }, 5000);
 
+    // Sync active participants from server on register/heartbeat
+    socket.on('bulk-participants-sync', (data: { participants: UserInfo[] }) => {
+      if (Array.isArray(data?.participants)) {
+        setConnectedUsers((prev) => {
+          // Merge server list with existing prev list, preserving any extra details
+          const map = new Map<string, UserInfo>();
+          for (const u of prev) {
+            const key = u.participantId || u.socketId || u.displayName.trim().toLowerCase();
+            map.set(key, u);
+          }
+          for (const u of data.participants) {
+            const key = u.participantId || u.socketId || u.displayName.trim().toLowerCase();
+            map.set(key, u);
+          }
+          return Array.from(map.values());
+        });
+      }
+    });
+
     // Listen for user joining (deduplicate by normalized displayName or socketId)
     socket.on('bulk-student-joined', (data: UserInfo) => {
       setConnectedUsers((prev) => {
@@ -235,6 +254,31 @@ function BulkPageContent() {
     // Handle user WebRTC offer to Host (create fresh peer connection per transfer)
     socket.on('bulk-webrtc-offer', async (data: { senderSocketId: string; offer: RTCSessionDescriptionInit; studentName?: string; participantId?: string }) => {
       if (!data?.offer || !data?.senderSocketId) return;
+
+      // Auto-recover missing student into connectedUsers list if not present
+      if (data.studentName || data.participantId) {
+        setConnectedUsers((prev) => {
+          const name = data.studentName || 'Student';
+          const pId = data.participantId || data.senderSocketId;
+          const exists = prev.some(
+            (u) =>
+              u.socketId === data.senderSocketId ||
+              (pId && u.participantId === pId) ||
+              u.displayName.trim().toLowerCase() === name.trim().toLowerCase()
+          );
+          if (!exists) {
+            return [
+              ...prev,
+              {
+                socketId: data.senderSocketId,
+                participantId: pId,
+                displayName: name,
+              },
+            ];
+          }
+          return prev;
+        });
+      }
 
       try {
         // Clean up previous connection for this sender socket if any
@@ -297,6 +341,28 @@ function BulkPageContent() {
                     size: parsed.size || parsed.fileSize || 0,
                     studentName: resolvedName,
                     chunks: [],
+                  });
+
+                  // Ensure student appears in host connectedUsers list
+                  setConnectedUsers((prev) => {
+                    const pId = parsed.participantId || data.participantId || data.senderSocketId;
+                    const exists = prev.some(
+                      (u) =>
+                        u.socketId === data.senderSocketId ||
+                        (pId && u.participantId === pId) ||
+                        u.displayName.trim().toLowerCase() === resolvedName.trim().toLowerCase()
+                    );
+                    if (!exists) {
+                      return [
+                        ...prev,
+                        {
+                          socketId: data.senderSocketId,
+                          participantId: pId,
+                          displayName: resolvedName,
+                        },
+                      ];
+                    }
+                    return prev;
                   });
                 } else if (parsed.type === 'eof') {
                   const targetId = parsed.fileId || currentFileId;
@@ -386,6 +452,7 @@ function BulkPageContent() {
 
     return () => {
       if (heartbeatIntervalRef.current) clearInterval(heartbeatIntervalRef.current);
+      socket.off('bulk-participants-sync');
       socket.off('bulk-student-joined');
       socket.off('bulk-student-left');
       socket.off('bulk-webrtc-offer');

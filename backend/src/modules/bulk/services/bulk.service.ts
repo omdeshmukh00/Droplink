@@ -209,6 +209,34 @@ export class BulkService {
   }
 
   /**
+   * Retrieves all active/connected participants for a session.
+   */
+  public async getActiveParticipants(sessionId: string): Promise<IBulkParticipant[]> {
+    const records = await prisma.bulkParticipant.findMany({
+      where: {
+        sessionId,
+        status: BulkParticipantStatus.CONNECTED,
+      },
+      orderBy: { joinedAt: 'asc' },
+    });
+    return records.map(mapBulkParticipant);
+  }
+
+  /**
+   * Updates a participant's status (e.g. CONNECTED, LEFT).
+   */
+  public async updateParticipantStatus(
+    participantId: string,
+    status: 'CONNECTED' | 'DISCONNECTED' | 'LEFT'
+  ): Promise<boolean> {
+    const updated = await prisma.bulkParticipant.updateMany({
+      where: { participantId },
+      data: { status: status as BulkParticipantStatus, lastSeenAt: new Date() },
+    }).catch(() => ({ count: 0 }));
+    return updated.count > 0;
+  }
+
+  /**
    * Updates host heartbeat.
    */
   public async updateHeartbeat(sessionId: string, hostSocketId?: string): Promise<boolean> {
