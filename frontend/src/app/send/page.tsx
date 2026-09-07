@@ -253,7 +253,8 @@ export default function SendPage() {
       setStatusMessage('All files transferred successfully via direct P2P!');
     } catch (err) {
       console.error('WebRTC transfer error:', err);
-      setStatusMessage('Direct transfer interrupted. Cloud Fallback available.');
+      setConnectionState('failed');
+      setStatusMessage('Direct P2P transfer interrupted. Cloud Fallback is available.');
     }
   }
 
@@ -297,7 +298,8 @@ export default function SendPage() {
         const modeLabel = details ? details.transportType : 'WebRTC P2P';
         setStatusMessage(`Connection Established (${modeLabel}). Preparing DataChannel...`);
       } else if (state === 'failed' || state === 'disconnected') {
-        setStatusMessage('Direct connection lost. You can use Cloud Fallback.');
+        setConnectionState('failed');
+        setStatusMessage('Direct P2P connection lost or failed. Cloud Fallback is available.');
       }
     });
 
@@ -673,12 +675,12 @@ export default function SendPage() {
           {/* Shared Files Summary List */}
           {selectedFiles.length > 0 && (
             <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl space-y-2.5 text-left">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
-                  <FileText className="w-4 h-4 text-blue-600" />
-                  <span>Shared Files ({selectedFiles.length})</span>
+              <div className="flex items-center justify-between gap-2 min-w-0">
+                <span className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5 min-w-0 truncate">
+                  <FileText className="w-4 h-4 text-blue-600 shrink-0" />
+                  <span className="truncate">Shared Files ({selectedFiles.length})</span>
                 </span>
-                <span className="text-2xs font-extrabold bg-blue-100 text-blue-700 border border-blue-200 px-2.5 py-0.5 rounded-full">
+                <span className="text-[10px] sm:text-2xs font-extrabold bg-blue-100 text-blue-700 border border-blue-200 px-2 sm:px-2.5 py-0.5 rounded-full whitespace-nowrap shrink-0">
                   Ready to Stream
                 </span>
               </div>
@@ -825,16 +827,26 @@ export default function SendPage() {
             </div>
           </div>
 
-          {/* Cloud Fallback Button */}
-          {connectionState !== 'completed' && (
-            <div className="pt-2 border-t border-slate-200/80 space-y-2">
+          {/* Cloud Fallback Option (Shown ONLY after a direct P2P connection failure or error) */}
+          {(connectionState === 'failed' || connectionState === 'fallback') && (
+            <div className="pt-3 border-t border-slate-200/80 space-y-3 text-left animate-in fade-in duration-300">
+              <div className="bg-amber-50 border border-amber-200/80 rounded-2xl p-3.5 flex items-start gap-3">
+                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <div className="text-xs text-amber-800 space-y-1">
+                  <p className="font-extrabold text-amber-900">Direct P2P Connection Unavailable</p>
+                  <p className="text-amber-700 leading-relaxed">
+                    A direct peer-to-peer connection could not be established, likely due to strict network or firewall restrictions. You can use Cloud Fallback to upload the file to cloud storage as an alternative.
+                  </p>
+                </div>
+              </div>
+
               <button
                 onClick={handleCloudFallback}
                 disabled={isCloudUploading}
-                className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2.5 px-4 rounded-xl text-xs flex items-center justify-center gap-2 transition-colors border border-slate-300 cursor-pointer disabled:cursor-not-allowed"
+                className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold py-3 px-4 rounded-xl text-xs flex items-center justify-center gap-2 transition-all shadow-md cursor-pointer disabled:cursor-not-allowed"
               >
-                <CloudUpload className="w-4 h-4 text-blue-600" />
-                <span>{isCloudUploading ? 'Uploading to Cloud...' : 'Direct Connection Unavailable? Use Cloud Fallback'}</span>
+                <CloudUpload className="w-4 h-4 text-white" />
+                <span>{isCloudUploading ? 'Uploading to Cloud Storage...' : 'Upload via Cloud Fallback'}</span>
               </button>
             </div>
           )}
