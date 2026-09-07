@@ -227,11 +227,16 @@ export class BulkService {
    */
   public async updateParticipantStatus(
     participantId: string,
-    status: 'CONNECTED' | 'DISCONNECTED' | 'LEFT'
+    status: 'CONNECTED' | 'DISCONNECTED' | 'LEFT',
+    socketId?: string
   ): Promise<boolean> {
     const updated = await prisma.bulkParticipant.updateMany({
       where: { participantId },
-      data: { status: status as BulkParticipantStatus, lastSeenAt: new Date() },
+      data: {
+        status: status as BulkParticipantStatus,
+        ...(socketId ? { socketId } : {}),
+        lastSeenAt: new Date(),
+      },
     }).catch(() => ({ count: 0 }));
     return updated.count > 0;
   }

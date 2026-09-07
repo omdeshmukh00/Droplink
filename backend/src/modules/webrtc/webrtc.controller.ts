@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { env } from '../../config/env';
 import { HttpStatusCodes } from '../../constants/httpStatusCodes';
+import { logger } from '../../utils/logger';
 
 export class WebRtcController {
   public getIceConfig = (req: Request, res: Response): Response => {
@@ -46,6 +47,25 @@ export class WebRtcController {
       // Fallback if TURN is forced but TURN config is missing: keep STUN
       iceServers.push({ urls: stunUrls });
     }
+
+    const hasStun = iceServers.some((s) =>
+      Array.isArray(s.urls) ? s.urls.some((u) => u.startsWith('stun:')) : String(s.urls).startsWith('stun:')
+    );
+    const hasTurn = iceServers.some((s) =>
+      Array.isArray(s.urls) ? s.urls.some((u) => u.startsWith('turn:') || u.startsWith('turns:')) : false
+    );
+    const hasTurnUdp = iceServers.some((s) =>
+      Array.isArray(s.urls)
+        ? s.urls.some((u) => u.startsWith('turn:') && (!u.includes('transport=') || u.includes('transport=udp')))
+        : false
+    );
+    const hasTurnTcp = iceServers.some((s) =>
+      Array.isArray(s.urls) ? s.urls.some((u) => u.includes('transport=tcp')) : false
+    );
+
+    logger.info(
+      `[TURN-TRACE] ICE config requested | turnOnly=${isTurnOnly} | STUN: ${hasStun} | TURN: ${hasTurn} | TURN UDP: ${hasTurnUdp} | TURN TCP: ${hasTurnTcp}`
+    );
 
     return res.status(HttpStatusCodes.OK).json({
       success: true,

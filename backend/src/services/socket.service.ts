@@ -205,7 +205,7 @@ export class SocketService {
 
         // Persist socketId & CONNECTED status in DB
         const { bulkService } = await import('../modules/bulk/services/bulk.service');
-        await bulkService.updateParticipantStatus(data.participantId, 'CONNECTED').catch(() => null);
+        await bulkService.updateParticipantStatus(data.participantId, 'CONNECTED', socket.id).catch(() => null);
 
         logger.info(`👤 Bulk Student Joined Socket Room: ${data.displayName} (${socket.id}) -> ${bulkRoom}`);
         socket.to(bulkRoom).emit('bulk-student-joined', {
