@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction, ErrorRequestHandler } from 'express';
 import { ZodError } from 'zod';
+import { Prisma } from '@prisma/client';
 import { AppError } from '../utils/AppError';
 import { ApiResponse } from '../utils/ApiResponse';
 import { logger } from '../utils/logger';
@@ -44,6 +45,38 @@ export const errorHandler: ErrorRequestHandler = (
       formattedFields
     );
     return;
+  }
+
+  // Handle Prisma Known Request Errors
+  if (err instanceof Prisma.PrismaClientKnownRequestError) {
+    if (err.code === 'P2002') {
+      const target = (err.meta?.target as string[])?.join(', ') || 'field';
+      ApiResponse.error(
+        res,
+        `Duplicate value entered for ${target}`,
+        HttpStatusCodes.CONFLICT,
+        ErrorCodes.CONFLICT
+      );
+      return;
+    }
+    if (err.code === 'P2025') {
+      ApiResponse.error(
+        res,
+        'Requested resource was not found',
+        HttpStatusCodes.NOT_FOUND,
+        ErrorCodes.NOT_FOUND
+      );
+      return;
+    }
+    if (err.code === 'P2003') {
+      ApiResponse.error(
+        res,
+        'Foreign key constraint violation',
+        HttpStatusCodes.BAD_REQUEST,
+        ErrorCodes.BAD_REQUEST
+      );
+      return;
+    }
   }
 
   // Handle Mongoose CastError (invalid ObjectId)

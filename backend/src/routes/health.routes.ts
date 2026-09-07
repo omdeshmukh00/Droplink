@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { databaseService } from '../config/database';
+import { prisma } from '../config/prisma';
 import { HttpStatusCodes } from '../constants/httpStatusCodes';
 import { ApiResponse } from '../utils/ApiResponse';
 import { ErrorCodes } from '../constants/errorCodes';
@@ -23,10 +24,18 @@ router.get('/health', (_req: Request, res: Response) => {
  * @desc    Readiness probe checking database connectivity
  * @access  Public
  */
-router.get('/ready', (_req: Request, res: Response) => {
-  const isDbReady = databaseService.isReady();
+router.get('/ready', async (_req: Request, res: Response) => {
+  let isPrismaReady = false;
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    isPrismaReady = true;
+  } catch {
+    isPrismaReady = false;
+  }
 
-  if (!isDbReady) {
+  const isMongoReady = databaseService.isReady();
+
+  if (!isPrismaReady && !isMongoReady) {
     return ApiResponse.error(
       res,
       'Database service is not ready',
@@ -38,7 +47,9 @@ router.get('/ready', (_req: Request, res: Response) => {
   return res.status(HttpStatusCodes.OK).json({
     success: true,
     status: 'ready',
-    database: 'connected',
+    database: isPrismaReady ? 'postgresql' : 'mongodb',
+    postgresql: isPrismaReady ? 'connected' : 'disconnected',
+    mongodb: isMongoReady ? 'connected' : 'disconnected',
   });
 });
 

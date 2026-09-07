@@ -1,6 +1,6 @@
 import cron, { ScheduledTask } from 'node-cron';
 import { transferRepository, TransferRepository } from '../../transfer/repositories/transfer.repository';
-import { TransferModel } from '../../transfer/models/transfer.model';
+import { prisma } from '../../../config/prisma';
 import { GoogleDriveStorageProvider } from '../../../storage/providers/GoogleDriveStorageProvider';
 import { ITransferDocument } from '../../transfer/interfaces/transfer.interface';
 import { TRANSFER_STATUS } from '../../transfer/constants/transfer.constants';
@@ -153,27 +153,27 @@ export class CleanupSchedulerService {
   }
 
   /**
-   * Cleans up a single transfer securely from Google Drive and MongoDB.
-   * If Google Drive deletion fails or file is already missing, MongoDB record is still cleaned up.
+   * Performs Google Drive cloud storage cleanup for future cloud storage integration.
+   * Note: WebRTC transfers are direct P2P transfers and PostgreSQL database records/senders are preserved.
    */
   public async cleanupTransfer(transfer: ITransferDocument): Promise<void> {
     let driveDeleteSuccess = false;
 
-    // Notify connected clients that transfer has expired
+    // Notify connected clients that transfer link has expired
     socketService.emitExpired(transfer.token, { token: transfer.token, shareId: transfer.shareId });
     if (transfer.shareId) {
       socketService.emitExpired(transfer.shareId, { token: transfer.token, shareId: transfer.shareId });
     }
 
-    // 1. Verify and delete Google Drive file if it exists
+    // 1. Delete Google Drive file if it exists (Future storage cleanup)
     if (transfer.driveFileId) {
       try {
         const driveExists = await this.driveProvider.exists(transfer.driveFileId);
         if (driveExists) {
           await this.driveProvider.delete(transfer.driveFileId);
           driveDeleteSuccess = true;
+          logger.info(`Google Drive storage file cleaned up for token '${transfer.token}'`);
         } else {
-          logger.info(`Google Drive file already missing for token '${transfer.token}', proceeding with Mongo cleanup`);
           driveDeleteSuccess = true;
         }
       } catch (driveErr: unknown) {
@@ -184,20 +184,8 @@ export class CleanupSchedulerService {
       }
     }
 
-    // 2. Delete MongoDB document regardless of Drive deletion outcome
-    try {
-      await TransferModel.findByIdAndDelete(transfer._id);
-      logger.info(`Transfer Deleted: Token=${transfer.token}, ShareID=${transfer.shareId}, DriveDeleted=${driveDeleteSuccess}`);
-
-      socketService.emitTransferDeleted(transfer.token, { token: transfer.token });
-      if (transfer.shareId) {
-        socketService.emitTransferDeleted(transfer.shareId, { token: transfer.token });
-      }
-    } catch (mongoErr: unknown) {
-      const mongoErrMsg = mongoErr instanceof Error ? mongoErr.message : String(mongoErr);
-      logger.error(`Mongo Delete Failed for token '${transfer.token}'`, { error: mongoErrMsg });
-      throw new Error(`Mongo Delete Failed: ${mongoErrMsg}`);
-    }
+    // 2. PostgreSQL / WebRTC transfers & Senders are preserved (No database deletion during Drive cron)
+    logger.info(`Google Drive cleanup finished for token '${transfer.token}', DriveDeleted=${driveDeleteSuccess}. Database record preserved.`);
   }
 
   /**

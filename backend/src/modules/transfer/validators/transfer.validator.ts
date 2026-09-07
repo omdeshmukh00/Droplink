@@ -35,6 +35,40 @@ export const createTransferSchema = z.object({
 
 export type CreateTransferInput = z.input<typeof createTransferSchema>;
 
+export const initiateP2PTransferSchema = z.object({
+  originalName: z.string().min(1).default('DropLink-Files'),
+  size: z.coerce.number().min(0).default(0),
+  mimeType: z.string().optional().default('application/octet-stream'),
+  senderName: z.string().optional(),
+  maxDownloads: z.coerce
+    .number()
+    .int()
+    .min(TRANSFER_LIMITS.MIN_RECEIVER_LIMIT)
+    .max(TRANSFER_LIMITS.MAX_RECEIVER_LIMIT)
+    .optional()
+    .default(TRANSFER_LIMITS.DEFAULT_MAX_DOWNLOADS),
+  receiverLimitEnabled: z.preprocess(
+    (val) => val === 'true' || val === true,
+    z.boolean()
+  ).optional().default(false),
+  receiverLimit: z.coerce
+    .number()
+    .int()
+    .min(TRANSFER_LIMITS.MIN_RECEIVER_LIMIT)
+    .max(TRANSFER_LIMITS.MAX_RECEIVER_LIMIT)
+    .optional(),
+  expiryMinutes: z.coerce
+    .number()
+    .int()
+    .min(TRANSFER_LIMITS.MIN_EXPIRY_MINUTES)
+    .max(TRANSFER_LIMITS.MAX_EXPIRY_MINUTES)
+    .optional()
+    .default(TRANSFER_LIMITS.DEFAULT_EXPIRY_MINUTES),
+  transferType: z.enum(['single', 'zip']).optional().default('single'),
+});
+
+export type InitiateP2PTransferInput = z.infer<typeof initiateP2PTransferSchema>;
+
 /**
  * Validates array of uploaded files against security limits and forbidden extensions.
  */

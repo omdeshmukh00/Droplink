@@ -2,9 +2,10 @@ import fs from 'fs';
 import path from 'path';
 import { Response } from 'express';
 import { TransferRepository, transferRepository } from '../repositories/transfer.repository';
+import { senderRepository } from '../repositories/sender.repository';
 import { GoogleDriveStorageProvider } from '../../../storage/providers/GoogleDriveStorageProvider';
 import { socketService } from '../../../services/socket.service';
-import { createTransferSchema, CreateTransferInput } from '../validators/transfer.validator';
+import { createTransferSchema, CreateTransferInput, initiateP2PTransferSchema, InitiateP2PTransferInput } from '../validators/transfer.validator';
 import { TransferResponseDto, TransferStatusDto } from '../dto/transfer.dto';
 import { TRANSFER_STATUS, TransferStatusType } from '../constants/transfer.constants';
 import {
@@ -161,10 +162,15 @@ export class TransferService {
       const expiryMinutes = parsedOptions.expiryMinutes;
       const expiresAt = new Date(Date.now() + expiryMinutes * 60 * 1000);
 
-      // 5. Save in MongoDB
+      // 4.5 Create or locate Sender entity
+      const senderCode = createdBy ? createdBy.trim() : `snd_${token.slice(0, 12)}`;
+      const sender = await senderRepository.findOrCreateSender(senderCode, createdBy);
+
+      // 5. Save in Database
       const transferDoc = await this.repository.create({
         token,
         shareId: rawShareId,
+        senderId: sender.id,
         driveFileId: driveUpload.fileId,
         originalName: files[0]?.originalname || targetFileName,
         storedName: targetFileName,
@@ -210,6 +216,75 @@ export class TransferService {
         }
       }
     }
+  }
+
+  /**
+   * Initiates WebRTC P2P direct transfer metadata in PostgreSQL without uploading file bytes.
+   */
+  public async initiateP2PTransfer(
+    options: InitiateP2PTransferInput,
+    createdBy?: string
+  ): Promise<TransferResponseDto> {
+    const token = generateTransferToken();
+    let rawShareId = generateShareId();
+    let isUnique = false;
+    let attempts = 0;
+
+    while (!isUnique && attempts < 10) {
+      const existing = await this.repository.findByShareId(rawShareId);
+      if (!existing) {
+        isUnique = true;
+      } else {
+        rawShareId = generateShareId();
+        attempts++;
+      }
+    }
+
+    if (!isUnique) {
+      throw new Error('Failed to generate unique Share ID');
+    }
+
+    const expiryMinutes = options.expiryMinutes || 10;
+    const expiresAt = new Date(Date.now() + expiryMinutes * 60 * 1000);
+
+    const senderName = options.senderName || createdBy;
+    const senderCode = senderName
+      ? `snd_${token.slice(0, 12)}`
+      : `snd_${token.slice(0, 12)}`;
+
+    const sender = await senderRepository.findOrCreateSender(senderCode, senderName);
+
+    const maxDownloads = options.receiverLimitEnabled && options.receiverLimit
+      ? options.receiverLimit
+      : (options.maxDownloads || 1);
+
+    const transferDoc = await this.repository.create({
+      token,
+      shareId: rawShareId,
+      senderId: sender.id,
+      driveFileId: 'p2p_direct',
+      originalName: options.originalName,
+      storedName: options.originalName,
+      mimeType: options.mimeType || 'application/octet-stream',
+      size: options.size || 0,
+      status: TRANSFER_STATUS.READY,
+      downloadCount: 0,
+      maxDownloads,
+      receiverLimitEnabled: options.receiverLimitEnabled || false,
+      receiverLimit: options.receiverLimit,
+      expiresAt,
+      createdBy: senderName,
+      transferType: options.transferType || 'single',
+      driveMetadata: { fileId: 'p2p_direct', mimeType: options.mimeType || 'application/octet-stream' },
+    });
+
+    const responseDto = this.formatTransferResponse(transferDoc);
+
+    logger.info(
+      `✨ P2P Transfer initiated in PostgreSQL: Token=${token}, ShareID=${responseDto.shareId}, SenderID=${sender.id}`
+    );
+
+    return responseDto;
   }
 
   /**

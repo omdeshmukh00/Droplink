@@ -1,11 +1,54 @@
 import crypto from 'crypto';
-import { BulkSession, IBulkSession } from '../../../models/bulkSession.model';
-import { BulkParticipant, IBulkParticipant } from '../../../models/bulkParticipant.model';
+import { prisma } from '../../../config/prisma';
+import { BulkSession, BulkParticipant, BulkSessionStatus, BulkParticipantStatus } from '@prisma/client';
+import { IBulkSession, BulkSessionStatus as BulkSessionStatusType } from '../../../models/bulkSession.model';
+import { IBulkParticipant } from '../../../models/bulkParticipant.model';
 import { env } from '../../../config/env';
 import { logger } from '../../../utils/logger';
 
+function mapBulkSession(record: BulkSession): IBulkSession {
+  return {
+    _id: record.id,
+    id: record.id,
+    sessionId: record.sessionId,
+    bulkCode: record.bulkCode,
+    status: record.status as BulkSessionStatusType,
+    hostSocketId: record.hostSocketId ?? undefined,
+    lastHostHeartbeat: record.lastHostHeartbeat,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+    closedAt: record.closedAt ?? undefined,
+    participantCount: record.participantCount,
+    maxParticipants: record.maxParticipants,
+    settings: record.settings as unknown as {
+      autoVerify: boolean;
+      requireHostVerification: boolean;
+      verificationCode?: string;
+    },
+  };
+}
+
+function mapBulkParticipant(record: BulkParticipant): IBulkParticipant {
+  return {
+    _id: record.id,
+    id: record.id,
+    participantId: record.participantId,
+    sessionId: record.sessionId,
+    displayName: record.displayName,
+    socketId: record.socketId ?? undefined,
+    joinedAt: record.joinedAt,
+    lastSeenAt: record.lastSeenAt,
+    status: record.status as 'CONNECTED' | 'DISCONNECTED' | 'LEFT',
+    filesUploaded: record.filesUploaded,
+    totalBytesUploaded: Number(record.totalBytesUploaded), // Safely cast BigInt to Number
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+  };
+}
+
 export class BulkService {
   private static instance: BulkService;
+  private isCheckingStale: boolean = false;
 
   private constructor() {}
 
@@ -23,7 +66,12 @@ export class BulkService {
     const maxRetries = 10;
     for (let i = 0; i < maxRetries; i++) {
       const numericCode = crypto.randomInt(100000000, 1000000000).toString();
-      const existing = await BulkSession.findOne({ bulkCode: numericCode, status: { $in: ['CREATING', 'ACTIVE'] } });
+      const existing = await prisma.bulkSession.findFirst({
+        where: {
+          bulkCode: numericCode,
+          status: { in: [BulkSessionStatus.CREATING, BulkSessionStatus.ACTIVE] },
+        },
+      });
       if (!existing) {
         return numericCode;
       }
@@ -40,28 +88,32 @@ export class BulkService {
   }> {
     // Enforce tenant/session isolation: Close any previous active sessions for this host socket
     if (hostSocketId) {
-      await BulkSession.updateMany(
-        { hostSocketId, status: 'ACTIVE' },
-        { status: 'CLOSED', closedAt: new Date() }
-      ).catch(() => null);
+      await prisma.bulkSession.updateMany({
+        where: { hostSocketId, status: BulkSessionStatus.ACTIVE },
+        data: { status: BulkSessionStatus.CLOSED, closedAt: new Date() },
+      }).catch(() => null);
     }
 
     const sessionId = `bulk_${crypto.randomBytes(12).toString('hex')}`;
     const bulkCode = await this.generateUniqueBulkCode();
 
-    const session = await BulkSession.create({
-      sessionId,
-      bulkCode,
-      status: 'ACTIVE',
-      hostSocketId: hostSocketId || undefined,
-      lastHostHeartbeat: new Date(),
-      participantCount: 0,
-      maxParticipants: env.MAX_BULK_PARTICIPANTS || 50,
-      settings: {
-        autoVerify: env.AUTO_VERIFY,
-        requireHostVerification: !env.AUTO_VERIFY,
+    const created = await prisma.bulkSession.create({
+      data: {
+        sessionId,
+        bulkCode,
+        status: BulkSessionStatus.ACTIVE,
+        hostSocketId: hostSocketId || null,
+        lastHostHeartbeat: new Date(),
+        participantCount: 0,
+        maxParticipants: env.MAX_BULK_PARTICIPANTS || 50,
+        settings: {
+          autoVerify: env.AUTO_VERIFY,
+          requireHostVerification: !env.AUTO_VERIFY,
+        },
       },
     });
+
+    const session = mapBulkSession(created);
 
     let baseClientUrl = env.CLIENT_URL;
     if (clientOrigin) {
@@ -84,12 +136,16 @@ export class BulkService {
    */
   public async getSessionByCode(codeOrId: string): Promise<IBulkSession | null> {
     const normalized = codeOrId.replace(/\s+/g, '').replace(/-/g, '').trim();
-    const session = await BulkSession.findOne({
-      $or: [{ bulkCode: normalized }, { sessionId: normalized }],
-      status: 'ACTIVE',
+    const sessionRecord = await prisma.bulkSession.findFirst({
+      where: {
+        OR: [{ bulkCode: normalized }, { sessionId: normalized }],
+        status: BulkSessionStatus.ACTIVE,
+      },
     });
 
-    if (!session) return null;
+    if (!sessionRecord) return null;
+
+    const session = mapBulkSession(sessionRecord);
 
     // Verify host heartbeat freshness (must have heartbeat within last 15 seconds)
     const timeoutMs = env.BULK_HOST_TIMEOUT || 15000;
@@ -130,33 +186,44 @@ export class BulkService {
 
     const participantId = `part_${crypto.randomBytes(8).toString('hex')}`;
 
-    const participant = await BulkParticipant.create({
-      participantId,
-      sessionId: session.sessionId,
-      displayName: sanitizedName,
-      socketId: socketId || undefined,
-      status: 'CONNECTED',
+    const createdParticipant = await prisma.bulkParticipant.create({
+      data: {
+        participantId,
+        sessionId: session.sessionId,
+        displayName: sanitizedName,
+        socketId: socketId || null,
+        status: BulkParticipantStatus.CONNECTED,
+      },
     });
 
-    session.participantCount += 1;
-    await session.save();
+    const updatedSessionRecord = await prisma.bulkSession.update({
+      where: { sessionId: session.sessionId },
+      data: { participantCount: { increment: 1 } },
+    });
+
+    const updatedSession = mapBulkSession(updatedSessionRecord);
+    const participant = mapBulkParticipant(createdParticipant);
 
     logger.info(`👤 Student '${sanitizedName}' joined Bulk Session ${session.sessionId}`);
-    return { session, participant };
+    return { session: updatedSession, participant };
   }
 
   /**
    * Updates host heartbeat.
    */
   public async updateHeartbeat(sessionId: string, hostSocketId?: string): Promise<boolean> {
-    const session = await BulkSession.findOne({ sessionId, status: 'ACTIVE' });
+    const session = await prisma.bulkSession.findFirst({
+      where: { sessionId, status: BulkSessionStatus.ACTIVE },
+    });
     if (!session) return false;
 
-    session.lastHostHeartbeat = new Date();
-    if (hostSocketId) {
-      session.hostSocketId = hostSocketId;
-    }
-    await session.save();
+    await prisma.bulkSession.update({
+      where: { id: session.id },
+      data: {
+        lastHostHeartbeat: new Date(),
+        ...(hostSocketId ? { hostSocketId } : {}),
+      },
+    });
     return true;
   }
 
@@ -164,38 +231,58 @@ export class BulkService {
    * Closes a Bulk Session and cleans up.
    */
   public async closeSession(sessionId: string, reason = 'Host ended session'): Promise<IBulkSession | null> {
-    const session = await BulkSession.findOne({ sessionId, status: { $ne: 'CLOSED' } });
+    const session = await prisma.bulkSession.findFirst({
+      where: { sessionId, status: { not: BulkSessionStatus.CLOSED } },
+    });
     if (!session) return null;
 
-    session.status = 'CLOSED';
-    session.closedAt = new Date();
-    await session.save();
+    const closedRecord = await prisma.bulkSession.update({
+      where: { id: session.id },
+      data: {
+        status: BulkSessionStatus.CLOSED,
+        closedAt: new Date(),
+      },
+    });
 
-    await BulkParticipant.updateMany({ sessionId }, { status: 'LEFT' });
+    await prisma.bulkParticipant.updateMany({
+      where: { sessionId },
+      data: { status: BulkParticipantStatus.LEFT },
+    });
+
     logger.info(`📦 Bulk Session Closed: ${sessionId} (${reason})`);
-
-    return session;
+    return mapBulkSession(closedRecord);
   }
 
   /**
    * Scans and closes stale sessions whose host heartbeat has timed out.
    */
   public async checkStaleSessions(): Promise<string[]> {
-    const timeoutMs = env.BULK_HOST_TIMEOUT || 15000;
-    const cutoff = new Date(Date.now() - timeoutMs);
-
-    const staleSessions = await BulkSession.find({
-      status: 'ACTIVE',
-      lastHostHeartbeat: { $lt: cutoff },
-    });
-
-    const closedIds: string[] = [];
-    for (const session of staleSessions) {
-      await this.closeSession(session.sessionId, 'Host heartbeat timeout');
-      closedIds.push(session.sessionId);
+    if (this.isCheckingStale) {
+      return [];
     }
 
-    return closedIds;
+    this.isCheckingStale = true;
+    try {
+      const timeoutMs = env.BULK_HOST_TIMEOUT || 15000;
+      const cutoff = new Date(Date.now() - timeoutMs);
+
+      const staleSessions = await prisma.bulkSession.findMany({
+        where: {
+          status: BulkSessionStatus.ACTIVE,
+          lastHostHeartbeat: { lt: cutoff },
+        },
+      });
+
+      const closedIds: string[] = [];
+      for (const session of staleSessions) {
+        await this.closeSession(session.sessionId, 'Host heartbeat timeout');
+        closedIds.push(session.sessionId);
+      }
+
+      return closedIds;
+    } finally {
+      this.isCheckingStale = false;
+    }
   }
 }
 
