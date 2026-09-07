@@ -154,16 +154,45 @@ export class SocketService {
 
         this.hostSessions.set(socket.id, data.sessionId);
         logger.info(`📦 Bulk Host Registered: Socket ${socket.id} -> ${bulkRoom}`);
+
+        // Sync all currently active connected participants to the Host UI
+        try {
+          const { bulkService } = await import('../modules/bulk/services/bulk.service');
+          const activeParticipants = await bulkService.getActiveParticipants(data.sessionId);
+          const participantsList = activeParticipants.map((p) => ({
+            socketId: p.socketId || '',
+            displayName: p.displayName,
+            participantId: p.participantId,
+            timestamp: p.joinedAt ? new Date(p.joinedAt).toISOString() : new Date().toISOString(),
+          }));
+          socket.emit('bulk-participants-sync', { participants: participantsList });
+        } catch (syncErr) {
+          logger.error('Failed to sync active participants on host register', { error: syncErr });
+        }
       });
 
       socket.on('bulk-host-heartbeat', async (data: { sessionId: string }) => {
         if (!data?.sessionId) return;
         const { bulkService } = await import('../modules/bulk/services/bulk.service');
         await bulkService.updateHeartbeat(data.sessionId, socket.id).catch(() => null);
+
+        // Sync active participants on heartbeat if needed
+        try {
+          const activeParticipants = await bulkService.getActiveParticipants(data.sessionId);
+          const participantsList = activeParticipants.map((p) => ({
+            socketId: p.socketId || '',
+            displayName: p.displayName,
+            participantId: p.participantId,
+            timestamp: p.joinedAt ? new Date(p.joinedAt).toISOString() : new Date().toISOString(),
+          }));
+          socket.emit('bulk-participants-sync', { participants: participantsList });
+        } catch {
+          // Silent ignore on heartbeat sync error
+        }
       });
 
       // Handle student joining bulk room
-      socket.on('bulk-student-join', (data: { sessionId: string; displayName: string; participantId: string }) => {
+      socket.on('bulk-student-join', async (data: { sessionId: string; displayName: string; participantId: string }) => {
         if (!data?.sessionId) return;
         const bulkRoom = `bulk:${data.sessionId}`;
         socket.join(bulkRoom);
@@ -173,6 +202,11 @@ export class SocketService {
           participantId: data.participantId,
           displayName: data.displayName,
         });
+
+        // Persist socketId & CONNECTED status in DB
+        const { bulkService } = await import('../modules/bulk/services/bulk.service');
+        await bulkService.updateParticipantStatus(data.participantId, 'CONNECTED').catch(() => null);
+
         logger.info(`👤 Bulk Student Joined Socket Room: ${data.displayName} (${socket.id}) -> ${bulkRoom}`);
         socket.to(bulkRoom).emit('bulk-student-joined', {
           socketId: socket.id,
@@ -357,6 +391,9 @@ export class SocketService {
           const studentInfo = this.studentSessions.get(socket.id)!;
           this.studentSessions.delete(socket.id);
           const bulkRoom = `bulk:${studentInfo.sessionId}`;
+          const { bulkService } = await import('../modules/bulk/services/bulk.service');
+          await bulkService.updateParticipantStatus(studentInfo.participantId, 'LEFT').catch(() => null);
+
           if (this.socketNamespace) {
             this.socketNamespace.to(bulkRoom).emit('bulk-student-left', {
               socketId: socket.id,
