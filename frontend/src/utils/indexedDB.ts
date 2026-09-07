@@ -13,13 +13,18 @@ const DB_NAME = 'DropLinkBulkDB';
 const DB_VERSION = 1;
 const STORE_NAME = 'bulk_files';
 
-function openDB(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    if (typeof window === 'undefined' || !window.indexedDB) {
-      reject(new Error('IndexedDB is not supported in this environment.'));
-      return;
-    }
+let cachedDBPromise: Promise<IDBDatabase> | null = null;
 
+function openDB(): Promise<IDBDatabase> {
+  if (typeof window === 'undefined' || !window.indexedDB) {
+    return Promise.reject(new Error('IndexedDB is not supported in this environment.'));
+  }
+
+  if (cachedDBPromise) {
+    return cachedDBPromise;
+  }
+
+  cachedDBPromise = new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
 
     request.onupgradeneeded = (event) => {
@@ -30,9 +35,24 @@ function openDB(): Promise<IDBDatabase> {
       }
     };
 
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const db = request.result;
+      db.onclose = () => {
+        cachedDBPromise = null;
+      };
+      db.onerror = () => {
+        cachedDBPromise = null;
+      };
+      resolve(db);
+    };
+
+    request.onerror = () => {
+      cachedDBPromise = null;
+      reject(request.error);
+    };
   });
+
+  return cachedDBPromise;
 }
 
 export async function saveBulkFileBlob(item: Omit<StoredBulkFile, 'timestamp'>): Promise<void> {

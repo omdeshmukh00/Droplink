@@ -85,6 +85,7 @@ function BulkPageContent() {
   const usersDropdownRef = useRef<HTMLDivElement>(null);
   const hostPeersRef = useRef<Map<string, WebRTCPeerManager>>(new Map());
   const peerIceQueueRef = useRef<Map<string, RTCIceCandidateInit[]>>(new Map());
+  const pendingBlobSavesRef = useRef<Map<string, Promise<void>>>(new Map());
 
   const triggerDuplicateWarning = (duplicateNames: string[]) => {
     const names = duplicateNames.map((n) => `'${n}'`).join(', ');
@@ -368,9 +369,30 @@ function BulkPageContent() {
                   const targetId = parsed.fileId || currentFileId;
                   if (targetId && transferMap.has(targetId)) {
                     const record = transferMap.get(targetId)!;
+                    const eofTime = performance.now();
                     const blob = new Blob(record.chunks, { type: record.mimeType });
+                    const blobAssemblyTime = performance.now() - eofTime;
 
-                    await saveBulkFileBlob({
+                    const newFileItem: ReceivedFileItem = {
+                      fileId: record.fileId,
+                      fileName: record.fileName,
+                      size: record.size,
+                      displayName: record.studentName,
+                      mimeType: record.mimeType,
+                      timestamp: Date.now(),
+                    };
+
+                    // 1. Update React UI State IMMEDIATELY (Metadata only)
+                    setReceivedFiles((prev) => [newFileItem, ...prev]);
+
+                    const uiRenderTime = performance.now() - eofTime;
+                    console.log(
+                      `[PERF] [${record.fileId}] EOF received -> Blob assembled (${blobAssemblyTime.toFixed(1)}ms) -> UI state updated (${uiRenderTime.toFixed(1)}ms)`
+                    );
+
+                    // 2. Persist Blob to IndexedDB asynchronously (non-blocking)
+                    const saveStartTime = performance.now();
+                    const savePromise = saveBulkFileBlob({
                       fileId: record.fileId,
                       sessionId: hostSession.sessionId,
                       fileName: record.fileName,
@@ -378,19 +400,24 @@ function BulkPageContent() {
                       size: record.size,
                       blob,
                       displayName: record.studentName,
-                    });
+                    })
+                      .then(() => {
+                        const saveDuration = performance.now() - saveStartTime;
+                        console.log(
+                          `[PERF] [${record.fileId}] Async IndexedDB save completed in ${saveDuration.toFixed(1)}ms`
+                        );
+                      })
+                      .catch((err) => {
+                        console.error(
+                          `[PERF] [${record.fileId}] Failed to persist blob to IndexedDB:`,
+                          err
+                        );
+                      })
+                      .finally(() => {
+                        pendingBlobSavesRef.current.delete(record.fileId);
+                      });
 
-                    setReceivedFiles((prev) => [
-                      {
-                        fileId: record.fileId,
-                        fileName: record.fileName,
-                        size: record.size,
-                        displayName: record.studentName,
-                        mimeType: record.mimeType,
-                        timestamp: Date.now(),
-                      },
-                      ...prev,
-                    ]);
+                    pendingBlobSavesRef.current.set(record.fileId, savePromise);
 
                     transferMap.delete(targetId);
                   }
@@ -713,6 +740,11 @@ function BulkPageContent() {
 
   // Host Action: Download Single File from IndexedDB
   const handleDownloadSingleFile = async (fileItem: ReceivedFileItem) => {
+    // Await in-flight background save if still persisting
+    if (pendingBlobSavesRef.current.has(fileItem.fileId)) {
+      await pendingBlobSavesRef.current.get(fileItem.fileId);
+    }
+
     const record = await getAllBulkFiles(hostSession?.sessionId || '');
     const target = record.find((r) => r.fileId === fileItem.fileId);
 
@@ -737,6 +769,11 @@ function BulkPageContent() {
   // Host Action: Download All Files as ZIP
   const handleDownloadAllZip = async () => {
     if (!hostSession) return;
+    // Await all in-flight background saves before generating ZIP
+    if (pendingBlobSavesRef.current.size > 0) {
+      await Promise.all(Array.from(pendingBlobSavesRef.current.values()));
+    }
+
     const records = await getAllBulkFiles(hostSession.sessionId);
 
     if (records.length === 0) return;
