@@ -2,13 +2,16 @@ import { Schema, model, Document } from 'mongoose';
 
 export type BulkSessionStatus = 'CREATING' | 'ACTIVE' | 'ENDING' | 'CLOSED' | 'FAILED';
 
-export interface IBulkSession extends Document {
+export interface IBulkSession {
+  _id: string;
+  id: string;
   sessionId: string;
   bulkCode: string; // 9-digit numeric string
   status: BulkSessionStatus;
   hostSocketId?: string;
   lastHostHeartbeat: Date;
   createdAt: Date;
+  updatedAt: Date;
   closedAt?: Date;
   participantCount: number;
   maxParticipants: number;

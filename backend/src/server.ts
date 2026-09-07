@@ -2,6 +2,7 @@ import http from 'http';
 import app from './app';
 import { env } from './config/env';
 import { databaseService } from './config/database';
+import { connectPrisma, disconnectPrisma } from './config/prisma';
 import { initSockets } from './sockets';
 import { initCronJobs } from './cron';
 import { socketService } from './services/socket.service';
@@ -12,7 +13,8 @@ import { logger } from './utils/logger';
 async function bootstrap() {
   logger.info('🚀 Initializing LinkDrop Backend Core Services...');
 
-  // 1. Connect to MongoDB Atlas
+  // 1. Connect to PostgreSQL (Prisma) and MongoDB Atlas
+  await connectPrisma();
   await databaseService.connect();
 
   // 2. Create HTTP Server
@@ -25,7 +27,7 @@ async function bootstrap() {
   initCronJobs();
 
   // 5. Start HTTP Server Listening
-    server.listen(env.PORT, '0.0.0.0', () => {
+  server.listen(env.PORT, '0.0.0.0', () => {
     logger.info(`✨ LinkDrop Server active on http://0.0.0.0:${env.PORT} [Environment: ${env.NODE_ENV}]`);
   });
 
@@ -57,7 +59,8 @@ async function bootstrap() {
       cronService.stopAll();
       cleanupSchedulerService.stop();
 
-      // 4. Close MongoDB Connection
+      // 4. Close PostgreSQL & MongoDB Connections
+      await disconnectPrisma();
       await databaseService.disconnect();
 
       clearTimeout(forceExitTimeout);

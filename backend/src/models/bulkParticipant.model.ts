@@ -1,6 +1,8 @@
 import { Schema, model, Document } from 'mongoose';
 
-export interface IBulkParticipant extends Document {
+export interface IBulkParticipant {
+  _id: string;
+  id: string;
   participantId: string;
   sessionId: string;
   displayName: string;
@@ -10,6 +12,8 @@ export interface IBulkParticipant extends Document {
   status: 'CONNECTED' | 'DISCONNECTED' | 'LEFT';
   filesUploaded: number;
   totalBytesUploaded: number;
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 const BulkParticipantSchema = new Schema<IBulkParticipant>(

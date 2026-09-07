@@ -1,10 +1,12 @@
-import { Document } from 'mongoose';
 import { TransferStatusType } from '../constants/transfer.constants';
 import { DriveMetadata } from '../types/transfer.types';
 
-export interface ITransferDocument extends Document {
+export interface ITransferDocument {
+  _id: string;
+  id: string;
   token: string;
   shareId: string; // Unformatted raw Share ID (e.g. ABC92LKJD)
+  senderId?: string;
   driveFileId: string;
   originalName: string;
   storedName: string;

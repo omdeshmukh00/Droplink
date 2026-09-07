@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { asyncHandler } from '../../../utils/asyncHandler';
 import { ApiResponse } from '../../../utils/ApiResponse';
 import { transferService, TransferService } from '../services/transfer.service';
-import { createTransferSchema, validateUploadedFiles } from '../validators/transfer.validator';
+import { createTransferSchema, initiateP2PTransferSchema, validateUploadedFiles } from '../validators/transfer.validator';
 import { TransferValidationError } from '../errors/transfer.errors';
 
 export class TransferController {
@@ -32,6 +32,12 @@ export class TransferController {
 
     const input = createTransferSchema.parse(req.body);
     const result = await this.service.createTransfer(files, input);
+    return ApiResponse.created(res, result);
+  });
+
+  public initiateP2P = asyncHandler(async (req: Request, res: Response) => {
+    const input = initiateP2PTransferSchema.parse(req.body);
+    const result = await this.service.initiateP2PTransfer(input);
     return ApiResponse.created(res, result);
   });
 

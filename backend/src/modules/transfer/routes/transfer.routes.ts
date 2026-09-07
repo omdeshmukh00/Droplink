@@ -33,6 +33,9 @@ const upload = multer({
 
 const router = Router();
 
+// POST /api/v1/transfers/initiate-p2p - Initiate P2P WebRTC transfer metadata in PostgreSQL
+router.post('/initiate-p2p', transferController.initiateP2P);
+
 // POST /api/v1/transfers - Create transfer & upload files
 router.post('/', upload.array('files', env.MAX_FILES), transferController.create);
 

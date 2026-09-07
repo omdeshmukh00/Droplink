@@ -1,0 +1,133 @@
+// DropLink PostgreSQL Schema (Prisma ORM)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ------------------------------------------------------
+// Enums
+// ------------------------------------------------------
+
+enum TransferStatus {
+  UPLOADING
+  READY
+  DOWNLOADING
+  EXPIRED
+  DELETED
+  FAILED
+}
+
+enum TransferType {
+  single
+  zip
+}
+
+enum BulkSessionStatus {
+  CREATING
+  ACTIVE
+  ENDING
+  CLOSED
+  FAILED
+}
+
+enum BulkParticipantStatus {
+  CONNECTED
+  DISCONNECTED
+  LEFT
+}
+
+// ------------------------------------------------------
+// Models
+// ------------------------------------------------------
+
+model Sender {
+  id         String   @id @default(cuid())
+  senderCode String   @unique @map("sender_code")
+  senderName String?  @map("sender_name")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  transfers Transfer[]
+
+  @@map("senders")
+}
+
+model Transfer {
+  id                   String         @id @default(cuid())
+  token                String         @unique
+  shareId              String         @unique @map("share_id")
+  senderId             String?        @map("sender_id")
+  driveFileId          String         @map("drive_file_id")
+  originalName         String         @map("original_name")
+  storedName           String         @map("stored_name")
+  mimeType             String         @map("mime_type")
+  size                 BigInt // File size in bytes (BigInt supports >2GB file transfers)
+  status               TransferStatus @default(UPLOADING)
+  downloadCount        Int            @default(0) @map("download_count")
+  maxDownloads         Int            @default(1) @map("max_downloads")
+  receiverLimitEnabled Boolean        @default(false) @map("receiver_limit_enabled")
+  receiverLimit        Int?           @map("receiver_limit")
+  expiresAt            DateTime       @map("expires_at")
+  createdBy            String?        @map("created_by")
+  lastAccessedAt       DateTime?      @map("last_accessed_at")
+  downloadStartedAt    DateTime?      @map("download_started_at")
+  downloadCompletedAt  DateTime?      @map("download_completed_at")
+  transferType         TransferType   @default(single) @map("transfer_type")
+  driveMetadata        Json           @map("drive_metadata")
+  createdAt            DateTime       @default(now()) @map("created_at")
+  updatedAt            DateTime       @updatedAt @map("updated_at")
+
+  sender Sender? @relation(fields: [senderId], references: [id], onDelete: SetNull)
+
+  @@index([status])
+  @@index([expiresAt])
+  @@index([senderId])
+  @@map("transfers")
+}
+
+model BulkSession {
+  id                String            @id @default(cuid())
+  sessionId         String            @unique @map("session_id")
+  bulkCode          String            @unique @map("bulk_code")
+  status            BulkSessionStatus @default(CREATING)
+  hostSocketId      String?           @map("host_socket_id")
+  lastHostHeartbeat DateTime          @default(now()) @map("last_host_heartbeat")
+  closedAt          DateTime?         @map("closed_at")
+  participantCount  Int               @default(0) @map("participant_count")
+  maxParticipants   Int               @default(50) @map("max_participants")
+  settings          Json
+  createdAt         DateTime          @default(now()) @map("created_at")
+  updatedAt         DateTime          @updatedAt @map("updated_at")
+
+  participants BulkParticipant[]
+
+  @@index([status])
+  @@index([hostSocketId])
+  @@index([lastHostHeartbeat])
+  @@map("bulk_sessions")
+}
+
+model BulkParticipant {
+  id                 String                @id @default(cuid())
+  participantId      String                @unique @map("participant_id")
+  sessionId          String                @map("session_id")
+  displayName        String                @map("display_name")
+  socketId           String?               @map("socket_id")
+  joinedAt           DateTime              @default(now()) @map("joined_at")
+  lastSeenAt         DateTime              @default(now()) @map("last_seen_at")
+  status             BulkParticipantStatus @default(CONNECTED)
+  filesUploaded      Int                   @default(0) @map("files_uploaded")
+  totalBytesUploaded BigInt                @default(0) @map("total_bytes_uploaded") // BigInt supports byte totals
+  createdAt          DateTime              @default(now()) @map("created_at")
+  updatedAt          DateTime              @updatedAt @map("updated_at")
+
+  session BulkSession @relation(fields: [sessionId], references: [sessionId], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@map("bulk_participants")
+}

@@ -174,23 +174,62 @@ export default function SendPage() {
     setSelectedFiles((prev) => prev.filter((_, i) => i !== index));
   };
 
-  const handleGenerateShare = () => {
+  const handleGenerateShare = async () => {
     if (selectedFiles.length === 0) return;
     setIsGenerating(true);
 
-    setTimeout(() => {
-      const randomId = Math.floor(100000000 + Math.random() * 900000000).toString();
+    try {
+      const isZip = selectedFiles.length > 1;
+      const totalSize = selectedFiles.reduce((acc, f) => acc + f.size, 0);
+      const originalName = isZip
+        ? `DropLink-Transfer-${selectedFiles.length}-Files.zip`
+        : selectedFiles[0].name;
+      const mimeType = isZip
+        ? 'application/zip'
+        : selectedFiles[0].type || 'application/octet-stream';
+
+      const apiUrl = getApiUrl();
+      const response = await axios.post(`${apiUrl}/transfers/initiate-p2p`, {
+        originalName,
+        size: totalSize,
+        mimeType,
+        senderName: senderName || undefined,
+        receiverLimitEnabled: limitMaxUsers,
+        receiverLimit: limitMaxUsers ? maxUsers : 1,
+        maxDownloads: limitMaxUsers ? maxUsers : 1,
+        autoVerify,
+        transferType: isZip ? 'zip' : 'single',
+      });
+
+      const responseData = response.data?.data;
+      const cleanShareId = (responseData?.shareId || '').replace(/[^a-zA-Z0-9]/g, '');
+
+      if (!cleanShareId) {
+        throw new Error('Server returned an invalid Share ID');
+      }
+
       const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000';
       const data = {
-        shareId: randomId,
-        shareUrl: `${origin}/receive?code=${randomId}`,
-        roomKey: `transfer:${randomId}`,
+        shareId: cleanShareId,
+        shareUrl: `${origin}/receive?code=${cleanShareId}`,
+        roomKey: `transfer:${cleanShareId}`,
       };
+
       setShareData(data);
-      setIsGenerating(false);
       setConnectionState('waiting-for-peer');
       setStatusMessage('Waiting for receiver to connect...');
-    }, 500);
+    } catch (err: unknown) {
+      console.error('Failed to initiate transfer metadata in database:', err);
+      const errorMsg =
+        axios.isAxiosError(err) && err.response?.data?.message
+          ? err.response.data.message
+          : err instanceof Error
+          ? err.message
+          : 'Failed to create transfer session';
+      setStatusMessage(`Error initializing session: ${errorMsg}`);
+    } finally {
+      setIsGenerating(false);
+    }
   };
 
   async function startWebRTCTransfer(manager: WebRTCPeerManager) {
