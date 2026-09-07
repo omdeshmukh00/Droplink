@@ -9,5 +9,4 @@ logs/
 !.env.example
 *.log
 
-coturn/
 
