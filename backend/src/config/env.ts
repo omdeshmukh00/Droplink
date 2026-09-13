@@ -36,6 +36,11 @@ const envSchema = z
     WEBRTC_TURN_CREDENTIAL: z.string().optional(),
     AUTO_VERIFY: z.coerce.boolean().default(true),
 
+    // TURN Provider Configuration
+    TURN_PROVIDER: z.enum(['cloudflare', 'metered', 'auto']).default('cloudflare'),
+    CLOUDFLARE_TURN_KEY_ID: z.string().optional(),
+    CLOUDFLARE_TURN_API_TOKEN: z.string().optional(),
+
     // Bulk Transfer Configuration
     BULK_TRANSFER_ENABLED: z.coerce.boolean().default(true),
     BULK_CODE_LENGTH: z.coerce.number().int().positive().default(9),
@@ -62,6 +67,19 @@ const envSchema = z
       message:
         'Google Drive credentials (GOOGLE_DRIVE_CLIENT_ID, GOOGLE_DRIVE_CLIENT_SECRET, GOOGLE_DRIVE_REFRESH_TOKEN, GOOGLE_DRIVE_FOLDER_ID) are required when STORAGE_PROVIDER is "google-drive"',
       path: ['STORAGE_PROVIDER'],
+    }
+  )
+  .refine(
+    (data) => {
+      if (data.TURN_PROVIDER === 'cloudflare') {
+        return Boolean(data.CLOUDFLARE_TURN_KEY_ID && data.CLOUDFLARE_TURN_API_TOKEN);
+      }
+      return true;
+    },
+    {
+      message:
+        'CLOUDFLARE_TURN_KEY_ID and CLOUDFLARE_TURN_API_TOKEN are required when TURN_PROVIDER is "cloudflare"',
+      path: ['TURN_PROVIDER'],
     }
   );
 
