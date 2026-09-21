@@ -38,7 +38,7 @@ export async function fetchIceConfiguration(options?: { turnOnly?: boolean }): P
     const response = await axios.get<{
       success: boolean;
       data?: { iceServers?: RTCIceServer[]; isTurnOnlyMode?: boolean };
-    }>(url, { timeout: 4000 });
+    }>(url, { timeout: 10000 });
 
     if (response.data?.success && Array.isArray(response.data?.data?.iceServers)) {
       const config = { iceServers: response.data.data.iceServers };

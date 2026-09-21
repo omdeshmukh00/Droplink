@@ -83,7 +83,10 @@ export default function SendPage() {
   const [transferBytes, setTransferBytes] = useState<string>('');
   const [isCloudUploading, setIsCloudUploading] = useState(false);
 
-  const rtcManagerRef = useRef<WebRTCPeerManager | null>(null);
+  const peersRef = useRef<Map<string, WebRTCPeerManager>>(new Map());
+  const [activeReceivers, setActiveReceivers] = useState<
+    { socketId: string; name: string; state: string; progress: number }[]
+  >([]);
 
   // Initialize Sender Name
   useEffect(() => {
@@ -232,7 +235,7 @@ export default function SendPage() {
     }
   };
 
-  async function startWebRTCTransfer(manager: WebRTCPeerManager) {
+  async function startWebRTCTransferForReceiver(receiverSocketId: string, manager: WebRTCPeerManager) {
     try {
       for (let i = 0; i < selectedFiles.length; i++) {
         const file = selectedFiles[i];
@@ -245,16 +248,23 @@ export default function SendPage() {
           if (prog.speedFormatted) setTransferSpeed(prog.speedFormatted);
           if (prog.etaFormatted) setTransferEta(prog.etaFormatted);
           if (prog.bytesFormatted) setTransferBytes(prog.bytesFormatted);
+
+          setActiveReceivers((prev) =>
+            prev.map((r) => (r.socketId === receiverSocketId ? { ...r, progress: overall } : r))
+          );
         });
       }
 
       setTransferProgress(100);
       setConnectionState('completed');
-      setStatusMessage('All files transferred successfully via direct P2P!');
+      setStatusMessage(`All files transferred successfully to receiver!`);
     } catch (err) {
-      console.error('WebRTC transfer error:', err);
-      setConnectionState('failed');
-      setStatusMessage('Direct P2P transfer interrupted. Cloud Fallback is available.');
+      console.error(`WebRTC transfer error for receiver ${receiverSocketId}:`, err);
+      peersRef.current.delete(receiverSocketId);
+      if (peersRef.current.size === 0) {
+        setConnectionState('failed');
+        setStatusMessage('Direct P2P transfer interrupted. Cloud Fallback is available.');
+      }
     }
   }
 
@@ -267,116 +277,148 @@ export default function SendPage() {
 
     socket.emit('join-transfer-room', { roomKey });
 
-    let isSubscribed = true;
-
-    if (rtcManagerRef.current) {
-      rtcManagerRef.current.close();
-      rtcManagerRef.current = null;
-    }
-
-    WebRTCPeerManager.create().then((manager) => {
-      if (!isSubscribed) {
-        manager.close();
-        return;
+    const getOrCreatePeerManager = async (receiverSocketId: string) => {
+      if (peersRef.current.has(receiverSocketId)) {
+        return peersRef.current.get(receiverSocketId)!;
       }
-      rtcManagerRef.current = manager;
+
+      if (limitMaxUsers && peersRef.current.size >= maxUsers) {
+        console.warn(`[SendPage] Receiver limit (${maxUsers}) reached. Rejecting connection for ${receiverSocketId}`);
+        return null;
+      }
+
+      const manager = await WebRTCPeerManager.create({ managerId: `peer_${receiverSocketId.slice(0, 6)}` });
+      peersRef.current.set(receiverSocketId, manager);
       const pc = manager.getPeerConnection();
 
-    pc.onicecandidate = (event) => {
-      if (event.candidate) {
-        socket.emit('webrtc-ice-candidate', {
-          roomKey,
-          candidate: event.candidate,
-        });
-      }
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          socket.emit('webrtc-ice-candidate', {
+            roomKey,
+            targetSocketId: receiverSocketId,
+            candidate: event.candidate,
+          });
+        }
+      };
+
+      manager.onConnectionStateChange(async (state) => {
+        if (state === 'connected') {
+          setConnectionState('connecting');
+          const details = await manager.logSelectedCandidatePair();
+          const modeLabel = details ? details.transportType : 'WebRTC P2P';
+          setStatusMessage(`Connected to receiver (${modeLabel}). Preparing DataChannel...`);
+        } else if (state === 'failed' || state === 'disconnected') {
+          peersRef.current.delete(receiverSocketId);
+          setActiveReceivers((prev) => prev.filter((r) => r.socketId !== receiverSocketId));
+          if (peersRef.current.size === 0) {
+            setConnectionState('failed');
+            setStatusMessage('Direct P2P connection lost or failed. Cloud Fallback is available.');
+          }
+        }
+      });
+
+      pc.ondatachannel = (event) => {
+        const channel = event.channel;
+        manager.setDataChannel(channel);
+
+        channel.onopen = () => {
+          setConnectionState('transferring');
+          setStatusMessage(`Transferring files directly via WebRTC DataChannel (${peersRef.current.size} active receiver(s))...`);
+          startWebRTCTransferForReceiver(receiverSocketId, manager);
+        };
+      };
+
+      return manager;
     };
 
-    manager.onConnectionStateChange(async (state) => {
-      if (state === 'connected') {
-        setConnectionState('connecting');
-        const details = await manager.logSelectedCandidatePair();
-        const modeLabel = details ? details.transportType : 'WebRTC P2P';
-        setStatusMessage(`Connection Established (${modeLabel}). Preparing DataChannel...`);
-      } else if (state === 'failed' || state === 'disconnected') {
-        setConnectionState('failed');
-        setStatusMessage('Direct P2P connection lost or failed. Cloud Fallback is available.');
-      }
-    });
-
     // Listen for WebRTC Signaling from Receiver
-    socket.on('pairing-required', (data: { verificationCode?: string; receiverName?: string }) => {
+    socket.on('pairing-required', async (data: { senderSocketId?: string; verificationCode?: string; receiverName?: string }) => {
+      const receiverSocketId = data.senderSocketId;
+      if (!receiverSocketId) return;
+
+      if (limitMaxUsers && peersRef.current.size >= maxUsers) {
+        console.warn(`[SendPage] Receiver limit (${maxUsers}) reached. Ignoring pairing request from ${receiverSocketId}`);
+        return;
+      }
+
+      const name = data.receiverName || 'Receiver';
+      setActiveReceivers((prev) => {
+        if (prev.some((r) => r.socketId === receiverSocketId)) return prev;
+        return [...prev, { socketId: receiverSocketId, name, state: 'pairing', progress: 0 }];
+      });
+
       if (autoVerify) {
-        // Auto-verify if autoVerify setting is ON
-        socket.emit('pairing-verified', { roomKey });
+        socket.emit('pairing-verified', { roomKey, targetSocketId: receiverSocketId });
         setConnectionState('connecting');
-        setStatusMessage(`Auto-verified receiver ${data.receiverName ? `'${data.receiverName}'` : ''}. Establishing P2P...`);
+        setStatusMessage(`Auto-verified receiver '${name}'. Establishing P2P...`);
       } else if (data.verificationCode) {
-        // Manual verification required
         setExpectedPairingCode(data.verificationCode);
         setConnectionState('pairing-verification');
-        setStatusMessage(`Receiver ${data.receiverName ? `'${data.receiverName}'` : ''} requested connection with 4-digit code.`);
+        setStatusMessage(`Receiver '${name}' requested connection with 4-digit code.`);
       }
     });
 
-    socket.on('webrtc-offer', async (data: { offer: RTCSessionDescriptionInit }) => {
+    socket.on('webrtc-offer', async (data: { senderSocketId?: string; offer: RTCSessionDescriptionInit; receiverName?: string }) => {
+      const receiverSocketId = data.senderSocketId;
+      if (!receiverSocketId) return;
+
       try {
+        const manager = await getOrCreatePeerManager(receiverSocketId);
+        if (!manager) return;
+
         setConnectionState('connecting');
-        setStatusMessage('Connecting to receiver...');
+        setStatusMessage(`Connecting to receiver ${data.receiverName ? `'${data.receiverName}'` : ''}...`);
+
         await manager.setRemoteDescription(data.offer);
         const answer = await manager.createAnswer();
 
         socket.emit('webrtc-answer', {
           roomKey,
+          targetSocketId: receiverSocketId,
           answer,
         });
       } catch (err) {
-        console.error('Failed to handle WebRTC offer:', err);
+        console.error(`Failed to handle WebRTC offer from ${receiverSocketId}:`, err);
       }
     });
 
-    socket.on('webrtc-answer', async (data: { answer: RTCSessionDescriptionInit }) => {
-      try {
-        await manager.setRemoteDescription(data.answer);
-      } catch (err) {
-        console.error('Failed to set remote description from answer:', err);
+    socket.on('webrtc-answer', async (data: { senderSocketId?: string; answer: RTCSessionDescriptionInit }) => {
+      const receiverSocketId = data.senderSocketId;
+      if (!receiverSocketId) return;
+      const manager = peersRef.current.get(receiverSocketId);
+      if (manager) {
+        try {
+          await manager.setRemoteDescription(data.answer);
+        } catch (err) {
+          console.error(`Failed to set remote description from ${receiverSocketId}:`, err);
+        }
       }
     });
 
-    socket.on('webrtc-ice-candidate', async (data: { candidate: RTCIceCandidateInit }) => {
-      try {
-        await manager.addIceCandidate(data.candidate);
-      } catch (err) {
-        console.error('Failed to add ICE candidate:', err);
+    socket.on('webrtc-ice-candidate', async (data: { senderSocketId?: string; candidate: RTCIceCandidateInit }) => {
+      const receiverSocketId = data.senderSocketId;
+      if (!receiverSocketId) return;
+      const manager = peersRef.current.get(receiverSocketId);
+      if (manager) {
+        try {
+          await manager.addIceCandidate(data.candidate);
+        } catch (err) {
+          console.error(`Failed to add ICE candidate from ${receiverSocketId}:`, err);
+        }
       }
-    });
-
-    // Handle incoming DataChannel if receiver created it
-    pc.ondatachannel = (event) => {
-      const channel = event.channel;
-      manager.setDataChannel(channel);
-
-      channel.onopen = () => {
-        setConnectionState('transferring');
-        setStatusMessage('Transferring files directly via WebRTC DataChannel...');
-        startWebRTCTransfer(manager);
-      };
-    };
     });
 
     return () => {
-      isSubscribed = false;
       socket.off('webrtc-offer');
       socket.off('webrtc-answer');
       socket.off('webrtc-ice-candidate');
       socket.off('pairing-required');
       socket.emit('leave-transfer-room', { roomKey });
-      if (rtcManagerRef.current) {
-        rtcManagerRef.current.close();
-        rtcManagerRef.current = null;
-      }
+      peersRef.current.forEach((mgr) => mgr.close());
+      peersRef.current.clear();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shareData, autoVerify]);
+  }, [shareData, autoVerify, limitMaxUsers, maxUsers]);
 
   const handleVerifyPairingCode = () => {
     if (!pairingCodeInput || pairingCodeInput.trim() !== expectedPairingCode) {
@@ -389,6 +431,9 @@ export default function SendPage() {
     setStatusMessage('Verification successful! Establishing WebRTC connection...');
     const socket = socketClient.getSocket();
     if (shareData) {
+      activeReceivers.forEach((r) => {
+        socket.emit('pairing-verified', { roomKey: shareData.roomKey, targetSocketId: r.socketId });
+      });
       socket.emit('pairing-verified', { roomKey: shareData.roomKey });
     }
   };

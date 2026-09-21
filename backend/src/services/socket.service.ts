@@ -217,57 +217,89 @@ export class SocketService {
       });
 
       // Normal WebRTC P2P Signaling
-      socket.on('webrtc-offer', (data: { roomKey: string; offer: unknown }) => {
+      socket.on('webrtc-offer', (data: { roomKey: string; targetSocketId?: string; offer: unknown; receiverName?: string }) => {
         if (!data?.roomKey || !data?.offer) return;
         const primaryRoom = data.roomKey.startsWith('transfer:') ? data.roomKey : `transfer:${data.roomKey}`;
-        socket.to(primaryRoom).to(data.roomKey).emit('webrtc-offer', {
+        const payload = {
           senderSocketId: socket.id,
           offer: data.offer,
-        });
+          receiverName: data.receiverName,
+        };
+        if (data.targetSocketId && this.socketNamespace) {
+          this.socketNamespace.to(data.targetSocketId).emit('webrtc-offer', payload);
+        } else {
+          socket.to(primaryRoom).to(data.roomKey).emit('webrtc-offer', payload);
+        }
       });
 
-      socket.on('webrtc-answer', (data: { roomKey: string; answer: unknown }) => {
+      socket.on('webrtc-answer', (data: { roomKey: string; targetSocketId?: string; answer: unknown }) => {
         if (!data?.roomKey || !data?.answer) return;
         const primaryRoom = data.roomKey.startsWith('transfer:') ? data.roomKey : `transfer:${data.roomKey}`;
-        socket.to(primaryRoom).to(data.roomKey).emit('webrtc-answer', {
+        const payload = {
           senderSocketId: socket.id,
           answer: data.answer,
-        });
+        };
+        if (data.targetSocketId && this.socketNamespace) {
+          this.socketNamespace.to(data.targetSocketId).emit('webrtc-answer', payload);
+        } else {
+          socket.to(primaryRoom).to(data.roomKey).emit('webrtc-answer', payload);
+        }
       });
 
-      socket.on('webrtc-ice-candidate', (data: { roomKey: string; candidate: unknown }) => {
+      socket.on('webrtc-ice-candidate', (data: { roomKey: string; targetSocketId?: string; candidate: unknown }) => {
         if (!data?.roomKey || !data?.candidate) return;
         const primaryRoom = data.roomKey.startsWith('transfer:') ? data.roomKey : `transfer:${data.roomKey}`;
-        socket.to(primaryRoom).to(data.roomKey).emit('webrtc-ice-candidate', {
+        const payload = {
           senderSocketId: socket.id,
           candidate: data.candidate,
-        });
+        };
+        if (data.targetSocketId && this.socketNamespace) {
+          this.socketNamespace.to(data.targetSocketId).emit('webrtc-ice-candidate', payload);
+        } else {
+          socket.to(primaryRoom).to(data.roomKey).emit('webrtc-ice-candidate', payload);
+        }
       });
 
-      socket.on('pairing-required', (data: { roomKey: string; verificationCode?: string }) => {
+      socket.on('pairing-required', (data: { roomKey: string; targetSocketId?: string; verificationCode?: string; receiverName?: string }) => {
         if (!data?.roomKey) return;
         const primaryRoom = data.roomKey.startsWith('transfer:') ? data.roomKey : `transfer:${data.roomKey}`;
-        socket.to(primaryRoom).to(data.roomKey).emit('pairing-required', {
+        const payload = {
           senderSocketId: socket.id,
           verificationCode: data.verificationCode,
-        });
+          receiverName: data.receiverName,
+        };
+        if (data.targetSocketId && this.socketNamespace) {
+          this.socketNamespace.to(data.targetSocketId).emit('pairing-required', payload);
+        } else {
+          socket.to(primaryRoom).to(data.roomKey).emit('pairing-required', payload);
+        }
       });
 
-      socket.on('pairing-verified', (data: { roomKey: string }) => {
+      socket.on('pairing-verified', (data: { roomKey: string; targetSocketId?: string }) => {
         if (!data?.roomKey) return;
         const primaryRoom = data.roomKey.startsWith('transfer:') ? data.roomKey : `transfer:${data.roomKey}`;
-        socket.to(primaryRoom).to(data.roomKey).emit('pairing-verified', {
+        const payload = {
           senderSocketId: socket.id,
-        });
+        };
+        if (data.targetSocketId && this.socketNamespace) {
+          this.socketNamespace.to(data.targetSocketId).emit('pairing-verified', payload);
+        } else {
+          socket.to(primaryRoom).to(data.roomKey).emit('pairing-verified', payload);
+        }
       });
 
-      socket.on('webrtc-connection-state', (data: { roomKey: string; state: string }) => {
+      socket.on('webrtc-connection-state', (data: { roomKey: string; targetSocketId?: string; state: string }) => {
         if (!data?.roomKey) return;
         const primaryRoom = data.roomKey.startsWith('transfer:') ? data.roomKey : `transfer:${data.roomKey}`;
-        socket.to(primaryRoom).to(data.roomKey).emit('webrtc-connection-state', {
+        const payload = {
           senderSocketId: socket.id,
           state: data.state,
-        });
+        };
+        if (data.targetSocketId && this.socketNamespace) {
+          this.socketNamespace.to(data.targetSocketId).emit('webrtc-connection-state', payload);
+        } else {
+          socket.to(primaryRoom).to(data.roomKey).emit('webrtc-connection-state', payload);
+        }
       });
 
       // Verify Share ID handler (P2P Room or DB Transfer check)

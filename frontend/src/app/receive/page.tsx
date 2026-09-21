@@ -85,7 +85,7 @@ export default function ReceivePage() {
       if (!isValid) {
         const socket = socketClient.getSocket();
         const socketCheck = await new Promise<{ valid: boolean; message?: string }>((resolve) => {
-          const timer = setTimeout(() => resolve({ valid: false, message: 'ShareID is Invalid' }), 2500);
+          const timer = setTimeout(() => resolve({ valid: false, message: 'ShareID is Invalid' }), 10000);
           socket.emit('verify-share-id', { shareId: normalized }, (response: { valid: boolean; message?: string }) => {
             clearTimeout(timer);
             resolve(response || { valid: false, message: 'ShareID is Invalid' });
@@ -232,10 +232,13 @@ export default function ReceivePage() {
       rtcManagerRef.current = manager;
       const pc = manager.getPeerConnection();
 
+      let senderSocketId: string | undefined = undefined;
+
       pc.onicecandidate = (event) => {
         if (event.candidate) {
           socket.emit('webrtc-ice-candidate', {
             roomKey,
+            targetSocketId: senderSocketId,
             candidate: event.candidate,
           });
         }
@@ -259,7 +262,10 @@ export default function ReceivePage() {
       });
       setConnectionStatus(`Waiting for sender verification (${pairingCode})...`);
 
-      socket.on('pairing-verified', async () => {
+      socket.on('pairing-verified', async (data?: { senderSocketId?: string }) => {
+        if (data?.senderSocketId) {
+          senderSocketId = data.senderSocketId;
+        }
         setIsPairingVerified(true);
         setConnectionStatus('Pairing verified! Initiating WebRTC DataChannel offer...');
 
@@ -271,15 +277,20 @@ export default function ReceivePage() {
 
           socket.emit('webrtc-offer', {
             roomKey,
+            targetSocketId: senderSocketId,
             offer,
+            receiverName: receiverName || getDefaultDeviceName(),
           });
         } catch (err) {
           console.error('Failed to create WebRTC offer:', err);
         }
       });
 
-      socket.on('webrtc-answer', async (data: { answer: RTCSessionDescriptionInit }) => {
+      socket.on('webrtc-answer', async (data: { senderSocketId?: string; answer: RTCSessionDescriptionInit }) => {
         try {
+          if (data?.senderSocketId) {
+            senderSocketId = data.senderSocketId;
+          }
           await manager.setRemoteDescription(data.answer);
         } catch (err) {
           console.error('Failed to set remote description from answer:', err);
